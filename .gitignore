@@ -1,0 +1,14 @@
+.DS_Store
+__pycache__/
+.ipynb_checkpoints/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+camel_logs/
+results/
+steering_vectors/*.pt
+data/contrastive_pairs/*.json
+third_party/Trojan-Activation-Attack/
+third_party/camel/
+*.log
