@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import platform
 import sys
 from pathlib import Path
 
@@ -16,14 +17,15 @@ def _check_path(label: str, path: Path) -> None:
     print(f"[{status}] {label}: {path}")
 
 
-def _check_import(module_name: str) -> None:
+def _check_import(module_name: str) -> bool:
     try:
         module = importlib.import_module(module_name)
     except Exception as exc:
         print(f"[missing] import {module_name}: {exc}")
-        return
+        return False
     module_path = getattr(module, "__file__", "built-in")
     print(f"[ok] import {module_name}: {module_path}")
+    return True
 
 
 if __name__ == "__main__":
@@ -33,7 +35,14 @@ if __name__ == "__main__":
     _check_path("contrastive-pairs dir", CONTRASTIVE_PAIRS_ROOT)
 
     ensure_local_camel_on_path()
-    _check_import("camel")
-    _check_import("torch")
-    _check_import("transformers")
-    _check_import("vllm")
+    required_modules = ["openai", "camel", "camel.agents", "torch", "transformers"]
+    optional_modules = []
+    if platform.system() != "Darwin":
+        optional_modules.append("vllm")
+
+    missing_required = [module_name for module_name in required_modules if not _check_import(module_name)]
+    for module_name in optional_modules:
+        _check_import(module_name)
+
+    if missing_required:
+        sys.exit(1)

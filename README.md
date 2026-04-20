@@ -3,6 +3,7 @@
 Experimental testbed for studying whether TA²-style activation steering effects propagate through CAMEL-based multi-agent systems.
 
 Project details, structure, and experiment phases live in `PLAN.md`.
+Operational workflow details live in `WORKFLOW.md`.
 
 ## Local Reference Repos
 
@@ -42,7 +43,7 @@ That script:
 2. clones or updates pinned TA2 and CAMEL references under `third_party/`
 3. installs the Python requirements into that environment
 4. installs the local CAMEL clone in editable mode
-5. generates TA2-derived contrastive pairs
+5. generates TA2-derived contrastive pairs from the full TA2 harmful dataset by default
 6. runs a setup verification pass
 
 The setup chain is also split into individual scripts:
@@ -95,6 +96,8 @@ conda run -n cascade python scripts/build_ta2_pairs.py \
   --dataset harmful \
   --output data/contrastive_pairs/ta2_harmful_pairs.json
 ```
+
+Use `--limit <N>` only for smoke tests when you intentionally want a smaller subset.
 
 ### 3. Compute Steering Vectors
 

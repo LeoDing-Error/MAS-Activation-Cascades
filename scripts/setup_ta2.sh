@@ -5,7 +5,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 ENV_NAME="$DEFAULT_ENV_NAME"
 PAIR_DATASET="harmful"
-PAIR_LIMIT=10
+PAIR_LIMIT=""
 GENERATE_PAIRS=1
 SKIP_CLONE=0
 OUTPUT_PATH="$PROJECT_ROOT/data/contrastive_pairs/ta2_harmful_pairs.json"
@@ -55,10 +55,14 @@ log "TA2 reference repo available at $TA2_DIR"
 
 if [[ "$GENERATE_PAIRS" -eq 1 ]]; then
   log "Generating TA2-derived contrastive pairs"
-  python_in_conda "$ENV_NAME" "$PROJECT_ROOT/scripts/build_ta2_pairs.py" \
-    --dataset "$PAIR_DATASET" \
-    --limit "$PAIR_LIMIT" \
+  pair_args=(
+    --dataset "$PAIR_DATASET"
     --output "$OUTPUT_PATH"
+  )
+  if [[ -n "$PAIR_LIMIT" ]]; then
+    pair_args+=(--limit "$PAIR_LIMIT")
+  fi
+  python_in_conda "$ENV_NAME" "$PROJECT_ROOT/scripts/build_ta2_pairs.py" "${pair_args[@]}"
 fi
 
 log "TA2 setup complete"

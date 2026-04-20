@@ -158,8 +158,51 @@ def compute_uncertainty_snapshot(
     )
 
 
+def _resolve_generation_backend(
+    backend: Any,
+    *,
+    _seen: Optional[set[int]] = None,
+) -> Optional[Any]:
+    if backend is None:
+        return None
+
+    if _seen is None:
+        _seen = set()
+    backend_id = id(backend)
+    if backend_id in _seen:
+        return None
+    _seen.add(backend_id)
+
+    if hasattr(backend, "last_generation"):
+        return backend
+
+    model_backend = getattr(backend, "model_backend", None)
+    if model_backend is not None:
+        resolved = _resolve_generation_backend(model_backend, _seen=_seen)
+        if resolved is not None:
+            return resolved
+
+    current_model = getattr(backend, "current_model", None)
+    if current_model is not None:
+        resolved = _resolve_generation_backend(current_model, _seen=_seen)
+        if resolved is not None:
+            return resolved
+
+    models = getattr(backend, "models", None)
+    if isinstance(models, Sequence) and not isinstance(
+        models, (str, bytes, bytearray)
+    ):
+        for model in models:
+            resolved = _resolve_generation_backend(model, _seen=_seen)
+            if resolved is not None:
+                return resolved
+
+    return None
+
+
 def snapshot_from_backend(backend: Any, text: str = "") -> UncertaintySnapshot:
-    generation = getattr(backend, "last_generation", None)
+    generation_backend = _resolve_generation_backend(backend)
+    generation = getattr(generation_backend, "last_generation", None)
     logits = None
     if generation is not None:
         logits = generation.step_logits

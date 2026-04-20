@@ -63,7 +63,12 @@ def build_pairs(dataset: str, limit: int | None = None) -> List[Dict[str, str]]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build contrastive prompt pairs from the local TA2 dataset clone")
     parser.add_argument("--dataset", default="harmful", choices=sorted(DATASET_TO_FILE.keys()))
-    parser.add_argument("--limit", type=int, default=10, help="Number of rows to include")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Optional positive row limit for smoke tests; omit to use the full dataset",
+    )
     parser.add_argument(
         "--output",
         type=Path,
@@ -71,6 +76,8 @@ def main() -> None:
         help="Output JSON file",
     )
     args = parser.parse_args()
+    if args.limit is not None and args.limit <= 0:
+        parser.error("--limit must be a positive integer when provided")
 
     pairs = build_pairs(args.dataset, limit=args.limit)
     args.output.parent.mkdir(parents=True, exist_ok=True)

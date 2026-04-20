@@ -25,6 +25,7 @@ class ContrastivePair:
 @dataclass(frozen=True)
 class LayerScore:
     layer: int
+    selection_score: float
     js_divergence: float
     vector_norm: float
     mean_safe_projection: float
@@ -242,6 +243,18 @@ def _jensen_shannon_divergence(safe: torch.Tensor, unsafe: torch.Tensor) -> floa
     return float((0.5 * (safe_kl + unsafe_kl)).mean().item())
 
 
+def _paired_projection_separation_score(
+    safe_stack: torch.Tensor,
+    unsafe_stack: torch.Tensor,
+    unit_vector: torch.Tensor,
+) -> float:
+    """Score a layer by how cleanly the paired activations separate along the contrastive direction."""
+    pairwise_gap = (unsafe_stack - safe_stack) @ unit_vector
+    mean_gap = float(pairwise_gap.mean().item())
+    spread = float(pairwise_gap.std(unbiased=False).item())
+    return mean_gap / (spread + 1e-12)
+
+
 def compute_steering_vector(
     model_name: str,
     output_path: Path,
@@ -305,8 +318,14 @@ def compute_steering_vector(
         unit_vector = F.normalize(vector, dim=0)
         safe_projection = safe_stack @ unit_vector
         unsafe_projection = unsafe_stack @ unit_vector
+        selection_score = _paired_projection_separation_score(
+            safe_stack=safe_stack,
+            unsafe_stack=unsafe_stack,
+            unit_vector=unit_vector,
+        )
         score = LayerScore(
             layer=layer,
+            selection_score=selection_score,
             js_divergence=_jensen_shannon_divergence(safe_stack, unsafe_stack),
             vector_norm=float(vector.norm().item()),
             mean_safe_projection=float(safe_projection.mean().item()),
@@ -315,7 +334,7 @@ def compute_steering_vector(
         layer_vectors[layer] = vector
         layer_scores.append(score)
 
-    selected = max(layer_scores, key=lambda item: item.js_divergence)
+    selected = max(layer_scores, key=lambda item: item.selection_score)
     selected_vector = layer_vectors[selected.layer]
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -359,7 +378,9 @@ def compute_steering_vector(
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Compute TA2-style steering vectors from contrastive prompt pairs")
+    parser = argparse.ArgumentParser(
+        description="Compute TA2-style steering vectors from contrastive prompt pairs using a contrastive layer-selection score"
+    )
     parser.add_argument("--model", required=True, help="Hugging Face model name or local path")
     parser.add_argument("--pairs-path", type=Path, default=None, help="JSON or JSONL file with contrastive pairs")
     parser.add_argument("--output", type=Path, required=True, help="Path to save the selected steering vector artifact")

@@ -7,7 +7,7 @@ ENV_NAME="$DEFAULT_ENV_NAME"
 INSTALL_CUDA121=0
 CAMEL_EXTRAS=""
 PAIR_DATASET="harmful"
-PAIR_LIMIT=10
+PAIR_LIMIT=""
 RUN_CHECK=1
 
 while [[ $# -gt 0 ]]; do
@@ -54,7 +54,14 @@ fi
 
 "$PROJECT_ROOT/scripts/setup_env.sh" "${setup_env_args[@]}"
 "$PROJECT_ROOT/scripts/setup_camel.sh" "${setup_camel_args[@]}"
-"$PROJECT_ROOT/scripts/setup_ta2.sh" --env-name "$ENV_NAME" --dataset "$PAIR_DATASET" --limit "$PAIR_LIMIT"
+setup_ta2_args=(
+  --env-name "$ENV_NAME"
+  --dataset "$PAIR_DATASET"
+)
+if [[ -n "$PAIR_LIMIT" ]]; then
+  setup_ta2_args+=(--limit "$PAIR_LIMIT")
+fi
+"$PROJECT_ROOT/scripts/setup_ta2.sh" "${setup_ta2_args[@]}"
 
 if [[ "$RUN_CHECK" -eq 1 ]]; then
   log "Running setup verification"
@@ -65,4 +72,14 @@ log "Full stack setup complete"
 log "Next steps:"
 log "  conda activate $ENV_NAME"
 log "  ./scripts/compute_vector_local.sh"
-log "  ./scripts/run_phase1_local.sh 1.2 steering_vectors/harmfulness_llama3_8b.pt"
+if is_macos; then
+  log "  Start the clean-agent server on Linux or Colab:"
+  log "    ./scripts/serve_clean_model.sh meta-llama/Meta-Llama-3-8B-Instruct"
+  log "  Then point the experiment wrapper at that endpoint:"
+  log "    CLEAN_API_BASE=http://host:port/v1 ./scripts/run_phase1_local.sh 1.2 steering_vectors/harmfulness_llama3_8b.pt"
+else
+  log "  In another terminal, start the clean-agent server:"
+  log "    ./scripts/serve_clean_model.sh meta-llama/Meta-Llama-3-8B-Instruct"
+  log "  Then run a multi-agent experiment:"
+  log "    ./scripts/run_phase1_local.sh 1.2 steering_vectors/harmfulness_llama3_8b.pt"
+fi
