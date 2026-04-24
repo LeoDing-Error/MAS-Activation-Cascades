@@ -15,4 +15,4 @@ huggingface-hub>=0.24
 openai>=1.86,<2
 safetensors>=0.4
 sentencepiece>=0.2
-vllm>=0.6.4; platform_system != "Darwin"
+vllm>=0.6.4; platform_system == "Linux"
