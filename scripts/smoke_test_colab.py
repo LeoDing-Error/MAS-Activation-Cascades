@@ -12,7 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-def _ok(label: str, fix: str = "") -> bool:
+def _ok(label: str) -> bool:
     print(f"[ok]   {label}")
     return True
 
