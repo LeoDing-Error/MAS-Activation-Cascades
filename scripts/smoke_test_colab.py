@@ -38,11 +38,6 @@ def check_paths() -> list[bool]:
     for label, path, fix in [
         ("third_party/camel", CAMEL_ROOT, "run scripts/setup_colab.sh"),
         ("third_party/Trojan-Activation-Attack", TA2_ROOT, "run scripts/setup_colab.sh"),
-        (
-            "data/contrastive_pairs/ta2_harmful_pairs.json",
-            CONTRASTIVE_PAIRS_ROOT / "ta2_harmful_pairs.json",
-            "run: python scripts/build_ta2_pairs.py",
-        ),
     ]:
         if path.exists():
             results.append(_ok(label))
