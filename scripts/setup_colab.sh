@@ -30,8 +30,14 @@ pip install --quiet -r "$PROJECT_ROOT/requirements.txt"
 # ── local CAMEL (must take precedence over any PyPI camel-ai) ─────────────────
 log "Installing local CAMEL editable..."
 if pip show camel-ai >/dev/null 2>&1; then
-  log "Removing conflicting PyPI camel-ai..."
-  pip uninstall -y camel-ai
+  CAMEL_LOC=$(pip show camel-ai 2>/dev/null | awk '/^Location:/{print $2}')
+  EDITABLE_LOC=$(realpath "$PROJECT_ROOT/third_party/camel")
+  if [[ "$CAMEL_LOC" != "$EDITABLE_LOC" ]]; then
+    log "Removing conflicting PyPI camel-ai (installed at $CAMEL_LOC)..."
+    pip uninstall -y camel-ai
+  else
+    log "Local editable camel-ai already installed at $EDITABLE_LOC"
+  fi
 fi
 pip install --quiet -e "$PROJECT_ROOT/third_party/camel"
 
