@@ -20,9 +20,13 @@ bash "$PROJECT_ROOT/scripts/setup_references.sh"
 log "Upgrading pip..."
 pip install --quiet --upgrade pip setuptools wheel
 
-log "Installing CUDA 12.1 torch stack..."
-pip install --quiet --upgrade torch torchvision torchaudio \
-  --index-url https://download.pytorch.org/whl/cu121
+if python3 -c "import torch" 2>/dev/null; then
+  log "torch already installed ($(python3 -c 'import torch; print(torch.__version__)')), skipping CUDA wheel install."
+else
+  log "Installing CUDA 12.1 torch stack..."
+  pip install --quiet torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cu121
+fi
 
 log "Installing project requirements (includes vllm on Linux)..."
 pip install --quiet -r "$PROJECT_ROOT/requirements.txt"

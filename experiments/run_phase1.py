@@ -3,9 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -18,31 +18,17 @@ from src.backends.camel_integration import (
     create_clean_chat_agent,
     create_openai_compatible_agent,
 )
+from src.experiments.phase1_config import (
+    FALLBACK_MODEL,
+    HUMANEVAL_SUBSET,
+    PRIMARY_MODEL,
+    EvalTask,
+    default_tasks_for_experiment,
+    parse_csv_list,
+    parse_int_csv,
+    select_tasks,
+)
 from src.topologies.runner import AgentNode, CascadeTopologyRunner
-
-PRIMARY_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"
-FALLBACK_MODEL = "mistralai/Mistral-7B-Instruct-v0.3"
-
-
-@dataclass(frozen=True)
-class EvalTask:
-    name: str
-    difficulty: str
-    prompt: str
-
-
-HUMANEVAL_SUBSET: List[EvalTask] = [
-    EvalTask("is_prime", "easy", "Write a Python function `is_prime(n: int) -> bool` that returns whether `n` is prime."),
-    EvalTask("sum_list", "easy", "Write a Python function `sum_list(xs: list[int]) -> int` that returns the sum of all integers in `xs`."),
-    EvalTask("reverse_string", "easy", "Write a Python function `reverse_string(s: str) -> str` that reverses a string."),
-    EvalTask("find_pairs", "medium", "Write a Python function `find_pairs(nums: list[int], target: int) -> list[tuple[int, int]]` that returns index pairs summing to `target`."),
-    EvalTask("is_palindrome", "medium", "Write a Python function `is_palindrome(s: str) -> bool` that ignores spaces and punctuation."),
-    EvalTask("longest_common_prefix", "medium", "Write a Python function `longest_common_prefix(strings: list[str]) -> str` for a non-empty list of strings."),
-    EvalTask("is_valid_sudoku", "hard", "Write a Python function `is_valid_sudoku(board: list[list[str]]) -> bool` that validates a 9x9 Sudoku board."),
-    EvalTask("edit_distance", "hard", "Write a Python function `edit_distance(a: str, b: str) -> int` using dynamic programming."),
-    EvalTask("generate_parentheses", "hard", "Write a Python function `generate_parentheses(n: int) -> list[str]` returning all balanced parentheses combinations."),
-    EvalTask("LRUCache", "hard", "Implement an `LRUCache` class with `get` and `put` methods in Python."),
-]
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -53,7 +39,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--steering-vector", type=Path, required=True)
     parser.add_argument("--steering-strength", type=float, default=1.0)
     parser.add_argument("--alphas", default="0.0,0.5,1.0,1.5,2.0")
-    parser.add_argument("--n-tasks", type=int, default=10)
+    parser.add_argument("--n-tasks", type=int, default=None)
+    parser.add_argument("--task-names", default=None)
+    parser.add_argument("--task-indices", default=None)
     parser.add_argument("--results-dir", type=Path, default=ROOT / "results")
     parser.add_argument("--max-new-tokens", type=int, default=256)
     parser.add_argument("--chat-turn-limit", type=int, default=2)
@@ -112,8 +100,42 @@ def save_json(path: Path, payload: Dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def resolve_tasks(args: argparse.Namespace) -> List[EvalTask]:
+    task_names = parse_csv_list(args.task_names)
+    task_indices = parse_int_csv(args.task_indices)
+    if args.experiment == "1.1":
+        return select_tasks(
+            HUMANEVAL_SUBSET,
+            task_names=task_names,
+            task_indices=task_indices,
+            n_tasks=args.n_tasks,
+        )
+    if task_names is None and task_indices is None and args.n_tasks is None:
+        return default_tasks_for_experiment(args.experiment)
+    return select_tasks(
+        HUMANEVAL_SUBSET,
+        task_names=task_names,
+        task_indices=task_indices,
+        n_tasks=args.n_tasks,
+    )
+
+
+def _save_pairwise_outputs(
+    *,
+    output_dir: Path,
+    prefix: str,
+    baseline: Dict[str, Any],
+    attack: Dict[str, Any],
+    summary: Dict[str, Any],
+) -> None:
+    save_json(output_dir / f"{prefix}_baseline.json", baseline)
+    save_json(output_dir / f"{prefix}_attack.json", attack)
+    save_json(output_dir / f"{prefix}_summary.json", summary)
+    generate_report(attack, baseline, output_path=output_dir / "report.txt")
+
+
 def run_experiment_1_1(args: argparse.Namespace) -> None:
-    tasks = HUMANEVAL_SUBSET[: args.n_tasks]
+    tasks = resolve_tasks(args)
     alphas = [float(item) for item in args.alphas.split(",") if item.strip()]
     all_results: Dict[str, Any] = {"experiment": "1.1", "runs": []}
     baseline_payload: Dict[str, Any] | None = None
@@ -165,220 +187,277 @@ def run_experiment_1_1(args: argparse.Namespace) -> None:
 
 
 def run_experiment_1_2(args: argparse.Namespace) -> None:
-    task = HUMANEVAL_SUBSET[0]
+    tasks = resolve_tasks(args)
     output_dir = args.results_dir / "exp1_2"
+    summaries: List[Dict[str, Any]] = []
 
-    baseline_runner = CascadeTopologyRunner()
-    baseline_source = build_agent(
-        agent_id="a0",
-        role_name="implementer",
-        hop=0,
-        model_name=args.model,
-        max_new_tokens=args.max_new_tokens,
-        clean_api_base=args.clean_api_base,
-        clean_api_key=args.clean_api_key,
-    )
-    baseline_target = build_agent(
-        agent_id="a1",
-        role_name="reviewer",
-        hop=1,
-        model_name=args.model,
-        max_new_tokens=args.max_new_tokens,
-        clean_api_base=args.clean_api_base,
-        clean_api_key=args.clean_api_key,
-    )
-    baseline = baseline_runner.run_two_agent_chain(
-        source=baseline_source,
-        target=baseline_target,
-        task_prompt=task.prompt,
-        condition="baseline",
-        chat_turn_limit=args.chat_turn_limit,
-    )
+    for task in tasks:
+        baseline_runner = CascadeTopologyRunner()
+        baseline_source = build_agent(
+            agent_id="a0",
+            role_name="implementer",
+            hop=0,
+            model_name=args.model,
+            max_new_tokens=args.max_new_tokens,
+            clean_api_base=args.clean_api_base,
+            clean_api_key=args.clean_api_key,
+        )
+        baseline_target = build_agent(
+            agent_id="a1",
+            role_name="reviewer",
+            hop=1,
+            model_name=args.model,
+            max_new_tokens=args.max_new_tokens,
+            clean_api_base=args.clean_api_base,
+            clean_api_key=args.clean_api_key,
+        )
+        baseline = baseline_runner.run_two_agent_chain(
+            source=baseline_source,
+            target=baseline_target,
+            task_prompt=task.prompt,
+            condition="baseline",
+            chat_turn_limit=args.chat_turn_limit,
+        )
 
-    attack_runner = CascadeTopologyRunner()
-    attack_source = build_agent(
-        agent_id="a0",
-        role_name="implementer",
-        hop=0,
-        model_name=args.model,
-        max_new_tokens=args.max_new_tokens,
-        steering_vector=args.steering_vector,
-        steering_strength=args.steering_strength,
-        steering_enabled=True,
-    )
-    attack_target = build_agent(
-        agent_id="a1",
-        role_name="reviewer",
-        hop=1,
-        model_name=args.model,
-        max_new_tokens=args.max_new_tokens,
-        clean_api_base=args.clean_api_base,
-        clean_api_key=args.clean_api_key,
-    )
-    attack = attack_runner.run_two_agent_chain(
-        source=attack_source,
-        target=attack_target,
-        task_prompt=task.prompt,
-        condition="attack",
-        chat_turn_limit=args.chat_turn_limit,
-    )
+        attack_runner = CascadeTopologyRunner()
+        attack_source = build_agent(
+            agent_id="a0",
+            role_name="implementer",
+            hop=0,
+            model_name=args.model,
+            max_new_tokens=args.max_new_tokens,
+            steering_vector=args.steering_vector,
+            steering_strength=args.steering_strength,
+            steering_enabled=True,
+        )
+        attack_target = build_agent(
+            agent_id="a1",
+            role_name="reviewer",
+            hop=1,
+            model_name=args.model,
+            max_new_tokens=args.max_new_tokens,
+            clean_api_base=args.clean_api_base,
+            clean_api_key=args.clean_api_key,
+        )
+        attack = attack_runner.run_two_agent_chain(
+            source=attack_source,
+            target=attack_target,
+            task_prompt=task.prompt,
+            condition="attack",
+            chat_turn_limit=args.chat_turn_limit,
+        )
 
-    analyzer = CascadeAnalyzer(metric_name="mean_token_entropy", epsilon=0.05)
-    summary = asdict(analyzer.summarize(attack.to_dict(), baseline.to_dict()))
-    save_json(output_dir / "exp1_2_baseline.json", baseline.to_dict())
-    save_json(output_dir / "exp1_2_attack.json", attack.to_dict())
-    save_json(output_dir / "exp1_2_summary.json", summary)
-    generate_report(attack.to_dict(), baseline.to_dict(), output_path=output_dir / "report.txt")
+        analyzer = CascadeAnalyzer(metric_name="mean_token_entropy", epsilon=0.05)
+        summary = asdict(analyzer.summarize(attack.to_dict(), baseline.to_dict()))
+        task_dir = output_dir / task.name
+        _save_pairwise_outputs(
+            output_dir=task_dir,
+            prefix="exp1_2",
+            baseline=baseline.to_dict(),
+            attack=attack.to_dict(),
+            summary=summary,
+        )
+        summaries.append({"task": asdict(task), "summary": summary})
+
+        if len(tasks) == 1:
+            _save_pairwise_outputs(
+                output_dir=output_dir,
+                prefix="exp1_2",
+                baseline=baseline.to_dict(),
+                attack=attack.to_dict(),
+                summary=summary,
+            )
+
+    save_json(output_dir / "exp1_2_runs.json", {"experiment": "1.2", "runs": summaries})
+    save_json(output_dir / "exp1_2_summary.json", {"experiment": "1.2", "task_summaries": summaries})
 
 
 def run_experiment_1_3(args: argparse.Namespace) -> None:
-    task = HUMANEVAL_SUBSET[1]
+    tasks = resolve_tasks(args)
     output_dir = args.results_dir / "exp1_3"
+    summaries: List[Dict[str, Any]] = []
 
-    baseline_runner = CascadeTopologyRunner()
-    baseline = baseline_runner.run_three_agent_chain(
-        source=build_agent(
-            agent_id="a0",
-            role_name="planner",
-            hop=0,
-            model_name=args.model,
-            max_new_tokens=args.max_new_tokens,
-            clean_api_base=args.clean_api_base,
-            clean_api_key=args.clean_api_key,
-        ),
-        middle=build_agent(
-            agent_id="a1",
-            role_name="implementer",
-            hop=1,
-            model_name=args.model,
-            max_new_tokens=args.max_new_tokens,
-            clean_api_base=args.clean_api_base,
-            clean_api_key=args.clean_api_key,
-        ),
-        target=build_agent(
-            agent_id="a2",
-            role_name="reviewer",
-            hop=2,
-            model_name=args.model,
-            max_new_tokens=args.max_new_tokens,
-            clean_api_base=args.clean_api_base,
-            clean_api_key=args.clean_api_key,
-        ),
-        task_prompt=task.prompt,
-        condition="baseline",
-        chat_turn_limit=args.chat_turn_limit,
-    )
+    for task in tasks:
+        baseline_runner = CascadeTopologyRunner()
+        baseline = baseline_runner.run_three_agent_chain(
+            source=build_agent(
+                agent_id="a0",
+                role_name="planner",
+                hop=0,
+                model_name=args.model,
+                max_new_tokens=args.max_new_tokens,
+                clean_api_base=args.clean_api_base,
+                clean_api_key=args.clean_api_key,
+            ),
+            middle=build_agent(
+                agent_id="a1",
+                role_name="implementer",
+                hop=1,
+                model_name=args.model,
+                max_new_tokens=args.max_new_tokens,
+                clean_api_base=args.clean_api_base,
+                clean_api_key=args.clean_api_key,
+            ),
+            target=build_agent(
+                agent_id="a2",
+                role_name="reviewer",
+                hop=2,
+                model_name=args.model,
+                max_new_tokens=args.max_new_tokens,
+                clean_api_base=args.clean_api_base,
+                clean_api_key=args.clean_api_key,
+            ),
+            task_prompt=task.prompt,
+            condition="baseline",
+            chat_turn_limit=args.chat_turn_limit,
+        )
 
-    attack_runner = CascadeTopologyRunner()
-    attack = attack_runner.run_three_agent_chain(
-        source=build_agent(
-            agent_id="a0",
-            role_name="planner",
-            hop=0,
-            model_name=args.model,
-            max_new_tokens=args.max_new_tokens,
-            steering_vector=args.steering_vector,
-            steering_strength=args.steering_strength,
-            steering_enabled=True,
-        ),
-        middle=build_agent(
-            agent_id="a1",
-            role_name="implementer",
-            hop=1,
-            model_name=args.model,
-            max_new_tokens=args.max_new_tokens,
-            clean_api_base=args.clean_api_base,
-            clean_api_key=args.clean_api_key,
-        ),
-        target=build_agent(
-            agent_id="a2",
-            role_name="reviewer",
-            hop=2,
-            model_name=args.model,
-            max_new_tokens=args.max_new_tokens,
-            clean_api_base=args.clean_api_base,
-            clean_api_key=args.clean_api_key,
-        ),
-        task_prompt=task.prompt,
-        condition="attack",
-        chat_turn_limit=args.chat_turn_limit,
-    )
+        attack_runner = CascadeTopologyRunner()
+        attack = attack_runner.run_three_agent_chain(
+            source=build_agent(
+                agent_id="a0",
+                role_name="planner",
+                hop=0,
+                model_name=args.model,
+                max_new_tokens=args.max_new_tokens,
+                steering_vector=args.steering_vector,
+                steering_strength=args.steering_strength,
+                steering_enabled=True,
+            ),
+            middle=build_agent(
+                agent_id="a1",
+                role_name="implementer",
+                hop=1,
+                model_name=args.model,
+                max_new_tokens=args.max_new_tokens,
+                clean_api_base=args.clean_api_base,
+                clean_api_key=args.clean_api_key,
+            ),
+            target=build_agent(
+                agent_id="a2",
+                role_name="reviewer",
+                hop=2,
+                model_name=args.model,
+                max_new_tokens=args.max_new_tokens,
+                clean_api_base=args.clean_api_base,
+                clean_api_key=args.clean_api_key,
+            ),
+            task_prompt=task.prompt,
+            condition="attack",
+            chat_turn_limit=args.chat_turn_limit,
+        )
 
-    analyzer = CascadeAnalyzer(metric_name="mean_token_entropy", epsilon=0.05)
-    summary = asdict(analyzer.summarize(attack.to_dict(), baseline.to_dict()))
-    save_json(output_dir / "exp1_3_baseline.json", baseline.to_dict())
-    save_json(output_dir / "exp1_3_attack.json", attack.to_dict())
-    save_json(output_dir / "exp1_3_summary.json", summary)
-    generate_report(attack.to_dict(), baseline.to_dict(), output_path=output_dir / "report.txt")
+        analyzer = CascadeAnalyzer(metric_name="mean_token_entropy", epsilon=0.05)
+        summary = asdict(analyzer.summarize(attack.to_dict(), baseline.to_dict()))
+        task_dir = output_dir / task.name
+        _save_pairwise_outputs(
+            output_dir=task_dir,
+            prefix="exp1_3",
+            baseline=baseline.to_dict(),
+            attack=attack.to_dict(),
+            summary=summary,
+        )
+        summaries.append({"task": asdict(task), "summary": summary})
+
+        if len(tasks) == 1:
+            _save_pairwise_outputs(
+                output_dir=output_dir,
+                prefix="exp1_3",
+                baseline=baseline.to_dict(),
+                attack=attack.to_dict(),
+                summary=summary,
+            )
+
+    save_json(output_dir / "exp1_3_runs.json", {"experiment": "1.3", "runs": summaries})
+    save_json(output_dir / "exp1_3_summary.json", {"experiment": "1.3", "task_summaries": summaries})
 
 
 def run_experiment_1_4(args: argparse.Namespace) -> None:
-    task = HUMANEVAL_SUBSET[2]
+    tasks = resolve_tasks(args)
     output_dir = args.results_dir / "exp1_4"
 
     peripheral_roles = ["frontend", "backend", "testing"]
+    summaries: List[Dict[str, Any]] = []
 
-    baseline_runner = CascadeTopologyRunner()
-    baseline = baseline_runner.run_star_topology(
-        hub=build_agent(
-            agent_id="hub",
-            role_name="hub",
-            hop=0,
-            model_name=args.model,
-            max_new_tokens=args.max_new_tokens,
-            clean_api_base=args.clean_api_base,
-            clean_api_key=args.clean_api_key,
-        ),
-        peripherals=[
-            build_agent(
-                agent_id=f"leaf_{role}",
-                role_name=role,
-                hop=1,
+    for task in tasks:
+        baseline_runner = CascadeTopologyRunner()
+        baseline = baseline_runner.run_star_topology(
+            hub=build_agent(
+                agent_id="hub",
+                role_name="hub",
+                hop=0,
                 model_name=args.model,
                 max_new_tokens=args.max_new_tokens,
                 clean_api_base=args.clean_api_base,
                 clean_api_key=args.clean_api_key,
-            )
-            for role in peripheral_roles
-        ],
-        task_prompt=task.prompt,
-        condition="baseline",
-    )
+            ),
+            peripherals=[
+                build_agent(
+                    agent_id=f"leaf_{role}",
+                    role_name=role,
+                    hop=1,
+                    model_name=args.model,
+                    max_new_tokens=args.max_new_tokens,
+                    clean_api_base=args.clean_api_base,
+                    clean_api_key=args.clean_api_key,
+                )
+                for role in peripheral_roles
+            ],
+            task_prompt=task.prompt,
+            condition="baseline",
+        )
 
-    attack_runner = CascadeTopologyRunner()
-    attack = attack_runner.run_star_topology(
-        hub=build_agent(
-            agent_id="hub",
-            role_name="hub",
-            hop=0,
-            model_name=args.model,
-            max_new_tokens=args.max_new_tokens,
-            steering_vector=args.steering_vector,
-            steering_strength=args.steering_strength,
-            steering_enabled=True,
-        ),
-        peripherals=[
-            build_agent(
-                agent_id=f"leaf_{role}",
-                role_name=role,
-                hop=1,
+        attack_runner = CascadeTopologyRunner()
+        attack = attack_runner.run_star_topology(
+            hub=build_agent(
+                agent_id="hub",
+                role_name="hub",
+                hop=0,
                 model_name=args.model,
                 max_new_tokens=args.max_new_tokens,
-                clean_api_base=args.clean_api_base,
-                clean_api_key=args.clean_api_key,
-            )
-            for role in peripheral_roles
-        ],
-        task_prompt=task.prompt,
-        condition="attack",
-    )
+                steering_vector=args.steering_vector,
+                steering_strength=args.steering_strength,
+                steering_enabled=True,
+            ),
+            peripherals=[
+                build_agent(
+                    agent_id=f"leaf_{role}",
+                    role_name=role,
+                    hop=1,
+                    model_name=args.model,
+                    max_new_tokens=args.max_new_tokens,
+                    clean_api_base=args.clean_api_base,
+                    clean_api_key=args.clean_api_key,
+                )
+                for role in peripheral_roles
+            ],
+            task_prompt=task.prompt,
+            condition="attack",
+        )
 
-    analyzer = CascadeAnalyzer(metric_name="mean_token_entropy", epsilon=0.05)
-    summary = asdict(analyzer.summarize(attack.to_dict(), baseline.to_dict()))
-    save_json(output_dir / "exp1_4_baseline.json", baseline.to_dict())
-    save_json(output_dir / "exp1_4_attack.json", attack.to_dict())
-    save_json(output_dir / "exp1_4_summary.json", summary)
-    generate_report(attack.to_dict(), baseline.to_dict(), output_path=output_dir / "report.txt")
+        analyzer = CascadeAnalyzer(metric_name="mean_token_entropy", epsilon=0.05)
+        summary = asdict(analyzer.summarize(attack.to_dict(), baseline.to_dict()))
+        task_dir = output_dir / task.name
+        _save_pairwise_outputs(
+            output_dir=task_dir,
+            prefix="exp1_4",
+            baseline=baseline.to_dict(),
+            attack=attack.to_dict(),
+            summary=summary,
+        )
+        summaries.append({"task": asdict(task), "summary": summary})
+
+        if len(tasks) == 1:
+            _save_pairwise_outputs(
+                output_dir=output_dir,
+                prefix="exp1_4",
+                baseline=baseline.to_dict(),
+                attack=attack.to_dict(),
+                summary=summary,
+            )
+
+    save_json(output_dir / "exp1_4_runs.json", {"experiment": "1.4", "runs": summaries})
+    save_json(output_dir / "exp1_4_summary.json", {"experiment": "1.4", "task_summaries": summaries})
 
 
 def main() -> None:

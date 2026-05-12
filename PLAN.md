@@ -224,11 +224,20 @@ python src/steering/compute_vectors.py \
 - `steering_vectors/harmfulness_llama3_8b.pt` (vector + metadata)
 - `steering_vectors/harmfulness_llama3_8b.analysis.pt` (all layer vectors)
 
-**Time estimate:** ~10 minutes (10 pairs × 2 conditions × forward passes)
+**Time estimate:**
+- 8B-class model: ~10-20 minutes on 1 H100/H200-class GPU
+- 70B-class model: ~30-60 minutes on a tensor-parallel shard that fits the model
+- Larger models: budget ~1-2 hours until you have one measured run for calibration
 
 ### Step 2: Run Experiments
 
 ```bash
+# Start the clean model server once and keep it warm for all multi-agent sweeps.
+./scripts/serve_clean_model.sh \
+    --tensor-parallel-size 4 \
+    --max-model-len 8192 \
+    meta-llama/Meta-Llama-3-8B-Instruct
+
 # Experiment 1.1: Validate steering
 python experiments/run_phase1.py --experiment 1.1 \
     --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
@@ -237,22 +246,95 @@ python experiments/run_phase1.py --experiment 1.1 \
 # Experiment 1.2: Two-agent cascade
 python experiments/run_phase1.py --experiment 1.2 \
     --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
-    --steering-strength 1.0
+    --steering-strength 1.0 \
+    --task-names is_prime,reverse_string \
+    --clean-api-base http://127.0.0.1:8000/v1
 
 # Experiment 1.3: Three-agent attenuation
 python experiments/run_phase1.py --experiment 1.3 \
-    --steering-vector steering_vectors/harmfulness_llama3_8b.pt
+    --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
+    --task-indices 1,4,7 \
+    --clean-api-base http://127.0.0.1:8000/v1
 
 # Experiment 1.4: Star topology breadth
 python experiments/run_phase1.py --experiment 1.4 \
-    --steering-vector steering_vectors/harmfulness_llama3_8b.pt
+    --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
+    --n-tasks 3 \
+    --clean-api-base http://127.0.0.1:8000/v1
+
+# Parallel sweep launcher
+./scripts/run_phase1_sweep.sh \
+    --experiments 1.2,1.3,1.4 \
+    --models meta-llama/Meta-Llama-3-8B-Instruct \
+    --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
+    --task-indices 0,1,2,3,4 \
+    --steering-strengths 0.5,1.0,1.5 \
+    --repeats 3 \
+    --clean-api-bases http://127.0.0.1:8000/v1,http://127.0.0.1:8001/v1 \
+    --worker-gpu-sets '4;5'
 ```
+
+Multi-task runs for experiments `1.2` to `1.4` now write per-task outputs under `results/exp1_X/<task_name>/` and an aggregate `exp1_X_runs.json` summary at the experiment root.
+
+### Approximate Runtime And GPU Budget
+
+These are planning numbers for H100/H200-class GPUs with `max_new_tokens=256`, `chat_turn_limit=2`, and one clean vLLM server kept warm across the sweep. Treat them as scheduling estimates, not guarantees. The first real run on your target model should be used to recalibrate the table.
+
+| Pipeline step | GPU footprint | Approx wall time | Notes |
+|---------------|---------------|------------------|-------|
+| Environment/setup verification | 0 GPU | 10-20 min | Mostly conda, imports, and local repo checks |
+| Build TA2 contrastive pairs | 0 GPU | 2-5 min | CPU and disk only |
+| Compute steering vector | 1 steered model shard | 10-20 min for 8B, 30-60 min for 70B | Based on 10 pairs × 2 forward passes plus layer scoring |
+| Start clean vLLM server | Clean model shard only | 5-15 min startup | Count this once per server launch, then amortize over all sweeps |
+| Experiment 1.1 per `(task, alpha)` | 1 steered model shard | 15-45 sec for 8B, 45-180 sec for 70B | One steered generation |
+| Experiment 1.2 per task | Clean server + 1 steered shard | 2-6 min for 8B, 6-20 min for 70B | Up to ~8 generated replies total at default turn limit |
+| Experiment 1.3 per task | Clean server + 1 steered shard | 4-10 min for 8B, 12-35 min for 70B | Up to ~16 generated replies total at default turn limit |
+| Experiment 1.4 per task | Clean server + 1 steered shard | 3-8 min for 8B, 10-25 min for 70B | Workforce orchestration adds extra clean-model calls |
+
+#### Generation Budget Heuristics
+
+- Experiment `1.1`: `n_tasks × n_alphas` steered generations.
+- Experiment `1.2`: about `8 × n_tasks` total model replies at default `chat_turn_limit=2`.
+- Experiment `1.3`: about `16 × n_tasks` total model replies at default `chat_turn_limit=2`.
+- Experiment `1.4`: budget `8-12 × n_tasks` clean-equivalent replies plus one steered hub reply per task.
+
+#### Total Sweep Planning Formula
+
+Use these estimates when reserving GPUs:
+
+```text
+total_wall_time ~= steering_vector_time
+                 + vllm_startup_time
+                 + sum(job_runtime for each sweep job) / number_of_parallel_lanes
+
+total_gpu_hours ~= (clean_server_gpu_count * clean_server_wall_hours)
+                 + sum(steered_job_gpu_count * steered_job_wall_hours)
+```
+
+Example planning envelope for a moderately heavy 8B sweep:
+
+- Task set: 5 tasks
+- Experiments: `1.2`, `1.3`, `1.4`
+- Steering strengths: `0.5`, `1.0`, `1.5`
+- Repeats: `3`
+- Jobs: `3 experiments × 3 strengths × 3 repeats = 27 jobs`
+- Per-job task workload: `5 tasks`
+- Approx wall time per job:
+  - `1.2`: `10-30 min`
+  - `1.3`: `20-50 min`
+  - `1.4`: `15-40 min`
+- Approx total serial wall time: `~20-55 GPU-hours` of steered-worker time, plus the clean server reservation
+- With 2 parallel lanes: `~10-28 hours` wall clock
+- With 4 parallel lanes: `~5-14 hours` wall clock
+
+For 70B-class sweeps, a conservative first-pass multiplier is `~3-4x` the 8B wall time until you record real measurements on your exact launch configuration.
 
 ### Step 3: Analyze Results
 
 Results saved to `results/exp1_X/`. Each experiment produces:
-- `exp1_X_results.json`: Full data
+- `exp1_1_results.json`: Full single-agent sweep data for experiment `1.1`
 - `exp1_X_summary.json`: Aggregated metrics
+- `exp1_X_runs.json`: Per-task aggregate for experiments `1.2` to `1.4`
 
 Generate report:
 ```python
@@ -267,6 +349,8 @@ with open("results/exp1_2/exp1_2_baseline.json") as f:
 report = generate_report(attack, baseline, output_path="results/exp1_2/report.txt")
 print(report)
 ```
+
+For multi-task runs of experiments `1.2` to `1.4`, switch the example paths to a task subdirectory such as `results/exp1_2/is_prime/`.
 
 ---
 
@@ -315,14 +399,29 @@ print(report)
 
 ---
 
+## GPU Allocation (school h100 cluster)
+
+| Field | Value |
+|-------|-------|
+| Server | h100 (H100, 80 GB each) |
+| GPUs | 3 |
+| Layout | GPU 0: clean vLLM server · GPU 1–2: parallel steered worker lanes |
+| Memory per GPU | 80 GB |
+| Storage | 300 GB |
+| Termination date | June 2, 2026 |
+
+Launch the sweep with: `--worker-gpu-sets '1;2'` and `--clean-api-base http://127.0.0.1:8000/v1`.
+
+---
+
 ## Timeline
 
-| Week | Milestone |
-|------|-----------|
-| 1 | Compute steering vectors, run Exp 1.1 |
-| 2 | Run Exp 1.2-1.4, initial analysis |
-| 3 | Statistical analysis, visualizations |
-| 4 | Decision gate: proceed to Phase 2 or write up Phase 1 |
+| Dates | Milestone |
+|-------|-----------|
+| May 12–13 | Environment setup, compute steering vector (~15 min on H100), run Exp 1.1 |
+| May 14–21 | Full sweep: Exp 1.2–1.4 (27 jobs × 5 tasks, 2 parallel lanes, ~8–10 hrs active) |
+| May 21–28 | Statistical analysis, visualizations, decision gate |
+| May 28–Jun 2 | Buffer: reruns or Phase 2 pilot |
 
 ---
 
