@@ -4,7 +4,7 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 ENV_NAME="$DEFAULT_ENV_NAME"
-MODEL_NAME="meta-llama/Meta-Llama-3-8B-Instruct"
+MODEL_NAME="meta-llama/Meta-Llama-3.1-8B-Instruct"
 PAIRS_PATH="$PROJECT_ROOT/data/contrastive_pairs/ta2_harmful_pairs.json"
 OUTPUT_PATH="$PROJECT_ROOT/steering_vectors/harmfulness_llama3_8b.pt"
 DEVICE="${DEVICE:-auto}"

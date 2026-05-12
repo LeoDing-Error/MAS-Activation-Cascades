@@ -7,7 +7,7 @@ ENV_NAME="$DEFAULT_ENV_NAME"
 RESULTS_DIR="${RESULTS_DIR:-$PROJECT_ROOT/results}"
 CLEAN_API_BASE="${CLEAN_API_BASE:-http://127.0.0.1:8000/v1}"
 CLEAN_API_KEY="${CLEAN_API_KEY:-EMPTY}"
-MODEL_NAME="meta-llama/Meta-Llama-3-8B-Instruct"
+MODEL_NAME="meta-llama/Meta-Llama-3.1-8B-Instruct"
 
 usage() {
   cat <<EOF

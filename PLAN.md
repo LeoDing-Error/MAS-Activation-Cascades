@@ -215,7 +215,7 @@ python -c "import torch; print(torch.cuda.is_available())"
 cd /home/claude/cascading-attacks
 
 python src/steering/compute_vectors.py \
-    --model meta-llama/Meta-Llama-3-8B-Instruct \
+    --model meta-llama/Meta-Llama-3.1-8B-Instruct \
     --output steering_vectors/harmfulness_llama3_8b.pt \
     --device cuda
 ```
@@ -236,7 +236,7 @@ python src/steering/compute_vectors.py \
 ./scripts/serve_clean_model.sh \
     --tensor-parallel-size 4 \
     --max-model-len 8192 \
-    meta-llama/Meta-Llama-3-8B-Instruct
+    meta-llama/Meta-Llama-3.1-8B-Instruct
 
 # Experiment 1.1: Validate steering
 python experiments/run_phase1.py --experiment 1.1 \
@@ -265,7 +265,7 @@ python experiments/run_phase1.py --experiment 1.4 \
 # Parallel sweep launcher
 ./scripts/run_phase1_sweep.sh \
     --experiments 1.2,1.3,1.4 \
-    --models meta-llama/Meta-Llama-3-8B-Instruct \
+    --models meta-llama/Meta-Llama-3.1-8B-Instruct \
     --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
     --task-indices 0,1,2,3,4 \
     --steering-strengths 0.5,1.0,1.5 \

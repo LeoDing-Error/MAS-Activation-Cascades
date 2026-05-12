@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -9,6 +10,10 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
+if _hf_token := os.environ.get("HF_TOKEN"):
+    import huggingface_hub
+    huggingface_hub.login(token=_hf_token, add_to_git_credential=False)
 
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
 DEFAULT_TOKEN_OFFSET = -2

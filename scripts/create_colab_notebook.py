@@ -265,7 +265,7 @@ else:
     subprocess.run(
         [
             'python', 'src/steering/compute_vectors.py',
-            '--model', 'meta-llama/Meta-Llama-3-8B-Instruct',
+            '--model', 'meta-llama/Meta-Llama-3.1-8B-Instruct',
             '--pairs-path', 'data/contrastive_pairs/ta2_harmful_pairs.json',
             '--output', VECTOR_PATH,
             '--device', 'cuda',

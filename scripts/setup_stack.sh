@@ -74,12 +74,12 @@ log "  conda activate $ENV_NAME"
 log "  ./scripts/compute_vector_local.sh"
 if is_macos; then
   log "  Start the clean-agent server on Linux or Colab:"
-  log "    ./scripts/serve_clean_model.sh meta-llama/Meta-Llama-3-8B-Instruct"
+  log "    ./scripts/serve_clean_model.sh meta-llama/Meta-Llama-3.1-8B-Instruct"
   log "  Then point the experiment wrapper at that endpoint:"
   log "    CLEAN_API_BASE=http://host:port/v1 ./scripts/run_phase1_local.sh 1.2 steering_vectors/harmfulness_llama3_8b.pt"
 else
   log "  In another terminal, start the clean-agent server:"
-  log "    ./scripts/serve_clean_model.sh meta-llama/Meta-Llama-3-8B-Instruct"
+  log "    ./scripts/serve_clean_model.sh meta-llama/Meta-Llama-3.1-8B-Instruct"
   log "  Then run a multi-agent experiment:"
   log "    ./scripts/run_phase1_local.sh 1.2 steering_vectors/harmfulness_llama3_8b.pt"
 fi

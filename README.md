@@ -68,9 +68,9 @@ For Colab or Linux GPU runs, reinstall PyTorch with CUDA 12.1 wheels before runn
 
 ## Hugging Face Access
 
-Primary backbone: `meta-llama/Meta-Llama-3-8B-Instruct`.
+Primary backbone: `meta-llama/Meta-Llama-3.1-8B-Instruct`.
 
-1. Request gated access: <https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct>
+1. Request gated access: <https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct>
 2. Log in locally or in Colab:
 
 ```bash
@@ -103,7 +103,7 @@ Use `--limit <N>` only for smoke tests when you intentionally want a smaller sub
 
 ```bash
 ./scripts/compute_vector_local.sh \
-  meta-llama/Meta-Llama-3-8B-Instruct \
+  meta-llama/Meta-Llama-3.1-8B-Instruct \
   data/contrastive_pairs/ta2_harmful_pairs.json \
   steering_vectors/harmfulness_llama3_8b.pt
 ```
@@ -113,7 +113,7 @@ Use `--limit <N>` only for smoke tests when you intentionally want a smaller sub
 Run this on Linux or Colab, not macOS:
 
 ```bash
-./scripts/serve_clean_model.sh meta-llama/Meta-Llama-3-8B-Instruct
+./scripts/serve_clean_model.sh meta-llama/Meta-Llama-3.1-8B-Instruct
 ```
 
 Default clean-agent endpoint:
@@ -122,7 +122,7 @@ Default clean-agent endpoint:
 
 Practical GPU note:
 
-- Running experiments `1.2` to `1.4` with a clean served `Meta-Llama-3-8B-Instruct` plus a separate local steered copy is an A100-class workflow.
+- Running experiments `1.2` to `1.4` with a clean served `Meta-Llama-3.1-8B-Instruct` plus a separate local steered copy is an A100-class workflow.
 - On a T4, treat this repo as a smoke-test setup unless you switch to the fallback model and reduce token budgets.
 
 ### 5. Run Phase 1 Experiments

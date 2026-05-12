@@ -39,14 +39,14 @@ conda run -n cascade python scripts/build_ta2_pairs.py \
 ### 2. Compute steering vector (GPU, ~15–20 min for 8B on H100)
 ```bash
 ./scripts/compute_vector_local.sh \
-  meta-llama/Meta-Llama-3-8B-Instruct \
+  meta-llama/Meta-Llama-3.1-8B-Instruct \
   data/contrastive_pairs/ta2_harmful_pairs.json \
   steering_vectors/harmfulness_llama3_8b.pt
 ```
 
 ### 3. Start clean-agent vLLM server (Linux only, keep running)
 ```bash
-./scripts/serve_clean_model.sh meta-llama/Meta-Llama-3-8B-Instruct
+./scripts/serve_clean_model.sh meta-llama/Meta-Llama-3.1-8B-Instruct
 # Default endpoint: http://127.0.0.1:8000/v1
 ```
 

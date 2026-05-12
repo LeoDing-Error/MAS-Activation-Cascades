@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Sequence
 
-PRIMARY_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"
+PRIMARY_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 FALLBACK_MODEL = "mistralai/Mistral-7B-Instruct-v0.3"
 
 

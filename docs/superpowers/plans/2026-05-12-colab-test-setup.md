@@ -287,7 +287,7 @@ optional **Experiment 1.2 (two-agent chain)** on a single Colab GPU.
 
 **Requirements:**
 - Colab Pro with A100 40 GB (Exp 1.1 only) *or* A100 80 GB (Exp 1.2 with local clean model)
-- HuggingFace account with access granted to `meta-llama/Meta-Llama-3-8B-Instruct`
+- HuggingFace account with access granted to `meta-llama/Meta-Llama-3.1-8B-Instruct`
 - HF token stored as a Colab secret named `HF_TOKEN`
 
 **Estimated wall time (A100 40 GB):**
@@ -436,7 +436,7 @@ else:
     print("Computing steering vector (this takes ~15–20 min)...")
     subprocess.run(
         ['python', 'src/steering/compute_vectors.py',
-         '--model', 'meta-llama/Meta-Llama-3-8B-Instruct',
+         '--model', 'meta-llama/Meta-Llama-3.1-8B-Instruct',
          '--pairs-path', 'data/contrastive_pairs/ta2_harmful_pairs.json',
          '--output', VECTOR_PATH,
          '--device', 'cuda'],
@@ -585,7 +585,7 @@ git commit -m "feat: add Colab quickstart notebook for Exp 1.1 initial results"
 
 Run the notebook on Colab and confirm the pipeline reaches Exp 1.1 results. This is an interactive check, not a CI test.
 
-**Prerequisites:** A100 runtime (Colab Pro), HF_TOKEN secret set, `meta-llama/Meta-Llama-3-8B-Instruct` access granted.
+**Prerequisites:** A100 runtime (Colab Pro), HF_TOKEN secret set, `meta-llama/Meta-Llama-3.1-8B-Instruct` access granted.
 
 - [ ] **Step 4.1: Upload or open the notebook in Colab**
 

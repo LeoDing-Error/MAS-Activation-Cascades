@@ -121,7 +121,7 @@ Command:
 
 ```bash
 ./scripts/compute_vector_local.sh \
-  meta-llama/Meta-Llama-3-8B-Instruct \
+  meta-llama/Meta-Llama-3.1-8B-Instruct \
   data/contrastive_pairs/ta2_harmful_pairs.json \
   steering_vectors/harmfulness_llama3_8b.pt
 ```
@@ -154,7 +154,7 @@ Security note:
 Command:
 
 ```bash
-./scripts/serve_clean_model.sh meta-llama/Meta-Llama-3-8B-Instruct
+./scripts/serve_clean_model.sh meta-llama/Meta-Llama-3.1-8B-Instruct
 ```
 
 Platform:
@@ -173,7 +173,7 @@ Why the server exists:
 
 GPU note:
 
-- `Meta-Llama-3-8B-Instruct` plus a second local steered copy is realistically an A100-class workflow
+- `Meta-Llama-3.1-8B-Instruct` plus a second local steered copy is realistically an A100-class workflow
 - on a T4, use the fallback model and treat multi-agent runs as smoke tests
 
 ### 8. Run experiments
@@ -183,7 +183,7 @@ Single-agent validation:
 ```bash
 conda run -n cascade python experiments/run_phase1.py \
   --experiment 1.1 \
-  --model meta-llama/Meta-Llama-3-8B-Instruct \
+  --model meta-llama/Meta-Llama-3.1-8B-Instruct \
   --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
   --n-tasks 10
 ```
