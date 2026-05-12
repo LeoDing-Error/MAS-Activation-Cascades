@@ -66,11 +66,11 @@ def check_gpu() -> list[bool]:
         vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
         print(f"       GPU: {name} ({vram_gb:.0f} GB VRAM)")
         if vram_gb >= 35:
-            results.append(_ok(f"VRAM ≥40 GB ({vram_gb:.0f} GB detected)"))
+            results.append(_ok(f"VRAM ≥35 GB ({vram_gb:.0f} GB detected)"))
         else:
             results.append(
                 _fail(
-                    f"VRAM ≥40 GB required, only {vram_gb:.0f} GB detected",
+                    f"VRAM ≥35 GB required, only {vram_gb:.0f} GB detected",
                     "Runtime → Change runtime type → GPU → A100",
                 )
             )
