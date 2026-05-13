@@ -24,6 +24,22 @@ class SweepLane:
     worker_gpu_set: str | None
 
 
+def filter_completed_jobs(jobs: Sequence[SweepJob]) -> List[SweepJob]:
+    """Drop jobs whose summary JSON already exists on disk. Used by --skip-existing
+    so Colab sessions can resume a partial sweep without re-running completed jobs."""
+    remaining: List[SweepJob] = []
+    skipped = 0
+    for job in jobs:
+        if job.summary_path().exists():
+            skipped += 1
+            print(f"[skip] {job.summary_path()} (already complete)")
+            continue
+        remaining.append(job)
+    if skipped:
+        print(f"[skip] {skipped} of {len(jobs)} jobs already complete; running {len(remaining)}.")
+    return remaining
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Launch Phase 1 experiment sweeps")
     parser.add_argument("--experiments", required=True, help="Comma-separated experiments, e.g. 1.2,1.3,1.4")
@@ -43,6 +59,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-new-tokens", type=int, default=256)
     parser.add_argument("--chat-turn-limit", type=int, default=2)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Skip jobs whose exp{N}_summary.json already exists in their results_dir (resumable sweeps).",
+    )
     return parser
 
 
@@ -141,6 +162,11 @@ def main() -> None:
         chat_turn_limit=args.chat_turn_limit,
     )
     jobs = build_sweep_jobs(config)
+    if args.skip_existing:
+        jobs = filter_completed_jobs(jobs)
+    if not jobs:
+        print("No jobs to run.")
+        return
     lanes = _build_lanes(clean_api_bases, worker_gpu_sets)
     sharded_jobs = [jobs[index::len(lanes)] for index in range(len(lanes))]
 
