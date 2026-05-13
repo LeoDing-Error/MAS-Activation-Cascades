@@ -32,6 +32,15 @@ class SweepJob:
     max_new_tokens: int
     chat_turn_limit: int
 
+    def summary_path(self) -> Path:
+        """Path to the summary JSON written by run_phase1.py when this job completes.
+
+        run_phase1.py writes results into `{results_dir}/exp{N_underscore}/exp{N_underscore}_summary.json`,
+        where N_underscore is e.g. "1_2" for experiment 1.2.
+        """
+        underscore = self.experiment.replace(".", "_")
+        return Path(self.results_dir) / f"exp{underscore}" / f"exp{underscore}_summary.json"
+
 
 def format_strength_tag(strength: float) -> str:
     return str(strength).replace("-", "neg_").replace(".", "p")
