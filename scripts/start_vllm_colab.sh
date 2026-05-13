@@ -13,8 +13,6 @@ PORT="${2:-8000}"
 GPU_UTIL="${3:-0.40}"
 
 [[ "$(uname -s)" == "Linux" ]] || { echo "Linux/Colab only." >&2; exit 1; }
-command -v vllm >/dev/null 2>&1 || command -v python >/dev/null 2>&1 || \
-  { echo "python not found." >&2; exit 1; }
 
 PID_FILE="/tmp/vllm_colab.pid"
 LOG_FILE="/tmp/vllm_colab.log"
