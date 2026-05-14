@@ -16,6 +16,8 @@ if str(ROOT) not in sys.path:
 from src.experiments.phase1_config import PRIMARY_MODEL, parse_csv_list, parse_int_csv
 from src.experiments.sweep import SweepConfig, SweepJob, build_sweep_jobs
 
+PDE_SCRATCH_ROOT = Path("/local/scratch2")
+
 
 @dataclass(frozen=True)
 class SweepLane:
@@ -42,7 +44,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--max-new-tokens", type=int, default=256)
     parser.add_argument("--chat-turn-limit", type=int, default=2)
-    parser.add_argument("--dry-run", action="store_true")
     return parser
 
 
@@ -105,18 +106,28 @@ def build_command(job: SweepJob, lane: SweepLane) -> tuple[list[str], dict[str, 
     return command, env
 
 
-def _run_lane(lane: SweepLane, jobs: Sequence[SweepJob], dry_run: bool) -> None:
+def require_pde_slurm_environment() -> None:
+    root = ROOT.resolve(strict=False)
+    try:
+        root.relative_to(PDE_SCRATCH_ROOT)
+    except ValueError as exc:
+        raise ValueError(f"Phase 1 sweeps must run from PDE scratch under {PDE_SCRATCH_ROOT}.") from exc
+
+    if not os.environ.get("SLURM_JOB_ID"):
+        raise ValueError("Phase 1 sweeps must run inside a PDE Slurm job.")
+
+
+def _run_lane(lane: SweepLane, jobs: Sequence[SweepJob]) -> None:
     for job in jobs:
         command, env = build_command(job, lane)
         command_text = " ".join(command)
         print(f"[lane {lane.lane_id}] {command_text}")
-        if dry_run:
-            continue
         subprocess.run(command, check=True, cwd=ROOT, env=env)
 
 
 def main() -> None:
     args = _build_parser().parse_args()
+    require_pde_slurm_environment()
     experiments = parse_csv_list(args.experiments)
     models = parse_csv_list(args.models)
     task_names = parse_csv_list(args.task_names)
@@ -127,6 +138,10 @@ def main() -> None:
 
     clean_api_bases = parse_csv_list(args.clean_api_bases)
     worker_gpu_sets = [item.strip() for item in args.worker_gpu_sets.split(";") if item.strip()] if args.worker_gpu_sets else None
+    if not clean_api_bases:
+        raise ValueError("PDE sweeps require --clean-api-bases.")
+    if not worker_gpu_sets:
+        raise ValueError("PDE sweeps require --worker-gpu-sets.")
 
     config = SweepConfig(
         experiments=experiments,
@@ -146,7 +161,7 @@ def main() -> None:
 
     with ThreadPoolExecutor(max_workers=len(lanes)) as executor:
         futures = [
-            executor.submit(_run_lane, lane, lane_jobs, args.dry_run)
+            executor.submit(_run_lane, lane, lane_jobs)
             for lane, lane_jobs in zip(lanes, sharded_jobs)
             if lane_jobs
         ]

@@ -90,7 +90,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
-  echo "vLLM serving is not supported on macOS. Run this script on Linux or Colab with CUDA."
+  echo "vLLM serving for this branch should run inside a PDE Slurm GPU job with CUDA."
   exit 1
 fi
 

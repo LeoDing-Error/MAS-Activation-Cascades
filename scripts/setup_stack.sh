@@ -71,15 +71,7 @@ fi
 log "Full stack setup complete"
 log "Next steps:"
 log "  conda activate $ENV_NAME"
-log "  ./scripts/compute_vector_local.sh"
-if is_macos; then
-  log "  Start the clean-agent server on Linux or Colab:"
-  log "    ./scripts/serve_clean_model.sh meta-llama/Meta-Llama-3.1-8B-Instruct"
-  log "  Then point the experiment wrapper at that endpoint:"
-  log "    CLEAN_API_BASE=http://host:port/v1 ./scripts/run_phase1_local.sh 1.2 steering_vectors/harmfulness_llama3_8b.pt"
-else
-  log "  In another terminal, start the clean-agent server:"
-  log "    ./scripts/serve_clean_model.sh meta-llama/Meta-Llama-3.1-8B-Instruct"
-  log "  Then run a multi-agent experiment:"
-  log "    ./scripts/run_phase1_local.sh 1.2 steering_vectors/harmfulness_llama3_8b.pt"
-fi
+log "  ./scripts/compute_vector_pde.sh"
+log "  Render and submit a PDE sweep job:"
+log "    python scripts/build_pde_sbatch.py sweep --netid <netid> --repo-dir /local/scratch2/<netid>/MAS-Activation-Cascades --steering-vector steering_vectors/harmfulness_llama3_8b.pt --clean-api-base http://clean-vllm-node:8000/v1 > pde-sweep.sbatch"
+log "    sbatch pde-sweep.sbatch"

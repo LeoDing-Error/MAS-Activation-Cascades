@@ -67,7 +67,7 @@ def main() -> None:
         "--limit",
         type=int,
         default=None,
-        help="Optional positive row limit for smoke tests; omit to use the full dataset",
+        help="Optional positive row limit; omit to use the full dataset",
     )
     parser.add_argument(
         "--output",

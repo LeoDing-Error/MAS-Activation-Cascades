@@ -40,7 +40,7 @@ pip_in_conda "$ENV_NAME" install -r "$PROJECT_ROOT/requirements.txt"
 
 if [[ "$INSTALL_CUDA121" -eq 1 ]]; then
   if is_macos; then
-    fail "--cuda121 is not supported on macOS"
+    fail "--cuda121 is only for the PDE CUDA setup"
   fi
   log "Reinstalling torch stack with CUDA 12.1 wheels in $ENV_NAME"
   pip_in_conda "$ENV_NAME" uninstall -y torch torchvision torchaudio || true

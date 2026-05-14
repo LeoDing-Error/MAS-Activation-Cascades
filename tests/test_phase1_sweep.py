@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.experiments.phase1_config import EvalTask, select_tasks
 from src.experiments.sweep import SweepConfig, build_sweep_jobs
@@ -88,6 +90,19 @@ class Phase1SweepMatrixTests(unittest.TestCase):
 
 
 class Phase1SweepMultiGpuTests(unittest.TestCase):
+    def test_require_pde_slurm_environment_rejects_non_scratch_checkout(self) -> None:
+        with patch.object(run_phase1_sweep, "ROOT", Path("/home/lding43/MAS-Activation-Cascades")):
+            with self.assertRaisesRegex(ValueError, "/local/scratch2"):
+                run_phase1_sweep.require_pde_slurm_environment()
+
+    def test_require_pde_slurm_environment_rejects_login_node_without_slurm_job(self) -> None:
+        scratch_root = Path("/local/scratch2/lding43/MAS-Activation-Cascades")
+        clean_env = {key: value for key, value in os.environ.items() if key != "SLURM_JOB_ID"}
+
+        with patch.dict(os.environ, clean_env, clear=True), patch.object(run_phase1_sweep, "ROOT", scratch_root):
+            with self.assertRaisesRegex(ValueError, "inside a PDE Slurm job"):
+                run_phase1_sweep.require_pde_slurm_environment()
+
     def test_build_lanes_pairs_clean_endpoints_with_multi_gpu_worker_sets(self) -> None:
         lanes = run_phase1_sweep._build_lanes(
             ["http://127.0.0.1:8000/v1", "http://127.0.0.1:8001/v1"],

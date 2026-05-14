@@ -12,7 +12,7 @@ DTYPE="${DTYPE:-auto}"
 
 usage() {
   cat <<EOF
-Usage: $0 [--env-name NAME] [model-name] [pairs-path] [output-path]
+Usage: $0 [--env-name NAME] [--device DEVICE] [--dtype DTYPE] [model-name] [pairs-path] [output-path]
 EOF
 }
 

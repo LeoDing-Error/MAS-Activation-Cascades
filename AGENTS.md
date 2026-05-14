@@ -7,17 +7,24 @@ Guidance for AI coding agents (Codex, Copilot Workspace, etc.) working in this r
 Always use the `cascade` conda environment. Never install packages into the base environment or with bare `pip install`.
 
 ```bash
-./scripts/setup_stack.sh            # first-time setup
-conda run -n cascade python scripts/check_setup.py  # verify
+python scripts/build_pde_sbatch.py setup \
+  --netid lding43 \
+  --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades > pde-setup.sbatch
+sbatch pde-setup.sbatch
 ```
+
+Submit the Slurm test job below after setup.
 
 ## Running tests
 
 ```bash
-conda run -n cascade python -m pytest tests/
+python scripts/build_pde_sbatch.py pytest \
+  --netid lding43 \
+  --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades > pde-pytest.sbatch
+sbatch pde-pytest.sbatch
 ```
 
-All tests are CPU-only and should pass without GPU access or model weights.
+All tests are CPU-only, but this branch still runs them through PDE Slurm.
 
 ## Critical invariants
 
@@ -27,7 +34,7 @@ All tests are CPU-only and should pass without GPU access or model weights.
 
 3. **Experiments 1.2–1.4 require a running vLLM server.** The `--clean-api-base` guard in `experiments/run_phase1.py` exists to prevent accidental multi-copy local model loading (OOM). Do not remove or bypass it.
 
-4. **`vllm` is Linux-only.** Do not attempt to install or import it on macOS.
+4. **PDE runs go through Slurm.** Do not run experiments, setup verification, model downloads, results, caches, or temporary files from `/home/lding43`.
 
 5. **Steering artifacts use `torch.load(..., weights_only=True)`.** Do not change this to the unsafe load path.
 
@@ -40,5 +47,5 @@ All tests are CPU-only and should pass without GPU access or model weights.
 ## What to avoid
 
 - Do not write results, steering vectors, or contrastive pairs to git — they are intentionally gitignored.
-- Do not run experiments on macOS expecting GPU behavior; use Linux or Colab.
-- Do not use `--allow-local-clean-models` in production sweep runs — it exists only for debugging on single-GPU machines.
+- Do not document or add notebook-based, ad hoc local, or non-PDE setup paths on this branch.
+- Multi-agent runs must use `--clean-api-base` from a PDE clean vLLM server job.

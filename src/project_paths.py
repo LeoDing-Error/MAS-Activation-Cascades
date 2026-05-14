@@ -13,7 +13,6 @@ DATA_ROOT = PROJECT_ROOT / "data"
 CONTRASTIVE_PAIRS_ROOT = DATA_ROOT / "contrastive_pairs"
 RESULTS_ROOT = PROJECT_ROOT / "results"
 STEERING_VECTORS_ROOT = PROJECT_ROOT / "steering_vectors"
-NOTEBOOKS_ROOT = PROJECT_ROOT / "notebooks"
 
 
 def _prepend_sys_path(path: Path) -> bool:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -15,11 +16,9 @@ from src.analysis.cascade_analyzer import CascadeAnalyzer, generate_report
 from src.backends.camel_integration import (
     AgentSpec,
     create_chat_agent,
-    create_clean_chat_agent,
     create_openai_compatible_agent,
 )
 from src.experiments.phase1_config import (
-    FALLBACK_MODEL,
     HUMANEVAL_SUBSET,
     PRIMARY_MODEL,
     EvalTask,
@@ -30,15 +29,15 @@ from src.experiments.phase1_config import (
 )
 from src.topologies.runner import AgentNode, CascadeTopologyRunner
 
+PDE_SCRATCH_ROOT = Path("/local/scratch2")
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run phase 1 cascade experiments")
-    parser.add_argument("--experiment", required=True, choices=["1.1", "1.2", "1.3", "1.4"])
+    parser.add_argument("--experiment", required=True, choices=["1.2", "1.3", "1.4"])
     parser.add_argument("--model", default=PRIMARY_MODEL)
-    parser.add_argument("--fallback-model", default=FALLBACK_MODEL)
     parser.add_argument("--steering-vector", type=Path, required=True)
     parser.add_argument("--steering-strength", type=float, default=1.0)
-    parser.add_argument("--alphas", default="0.0,0.5,1.0,1.5,2.0")
     parser.add_argument("--n-tasks", type=int, default=None)
     parser.add_argument("--task-names", default=None)
     parser.add_argument("--task-indices", default=None)
@@ -47,11 +46,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--chat-turn-limit", type=int, default=2)
     parser.add_argument("--clean-api-base", default=None)
     parser.add_argument("--clean-api-key", default="EMPTY")
-    parser.add_argument(
-        "--allow-local-clean-models",
-        action="store_true",
-        help="Allow multi-agent runs to instantiate clean HuggingFace models locally instead of requiring an OpenAI-compatible server",
-    )
     return parser
 
 
@@ -91,7 +85,7 @@ def build_agent(
             model_config_dict={"max_tokens": max_new_tokens},
         )
     else:
-        agent = create_clean_chat_agent(spec, model_name=model_name)
+        raise ValueError("Clean agents must use a PDE clean vLLM server via --clean-api-base.")
     return AgentNode(agent_id=agent_id, role_name=role_name, hop=hop, agent=agent)
 
 
@@ -103,13 +97,6 @@ def save_json(path: Path, payload: Dict[str, Any]) -> None:
 def resolve_tasks(args: argparse.Namespace) -> List[EvalTask]:
     task_names = parse_csv_list(args.task_names)
     task_indices = parse_int_csv(args.task_indices)
-    if args.experiment == "1.1":
-        return select_tasks(
-            HUMANEVAL_SUBSET,
-            task_names=task_names,
-            task_indices=task_indices,
-            n_tasks=args.n_tasks,
-        )
     if task_names is None and task_indices is None and args.n_tasks is None:
         return default_tasks_for_experiment(args.experiment)
     return select_tasks(
@@ -118,6 +105,20 @@ def resolve_tasks(args: argparse.Namespace) -> List[EvalTask]:
         task_indices=task_indices,
         n_tasks=args.n_tasks,
     )
+
+
+def require_pde_slurm_gpu_environment() -> None:
+    root = ROOT.resolve(strict=False)
+    try:
+        root.relative_to(PDE_SCRATCH_ROOT)
+    except ValueError as exc:
+        raise ValueError(f"Phase 1 experiments must run from PDE scratch under {PDE_SCRATCH_ROOT}.") from exc
+
+    if not os.environ.get("SLURM_JOB_ID"):
+        raise ValueError("Phase 1 experiments must run inside a PDE Slurm job.")
+
+    if not os.environ.get("CUDA_VISIBLE_DEVICES"):
+        raise ValueError("Phase 1 experiments must run with CUDA_VISIBLE_DEVICES set by the PDE Slurm job.")
 
 
 def _save_pairwise_outputs(
@@ -132,58 +133,6 @@ def _save_pairwise_outputs(
     save_json(output_dir / f"{prefix}_attack.json", attack)
     save_json(output_dir / f"{prefix}_summary.json", summary)
     generate_report(attack, baseline, output_path=output_dir / "report.txt")
-
-
-def run_experiment_1_1(args: argparse.Namespace) -> None:
-    tasks = resolve_tasks(args)
-    alphas = [float(item) for item in args.alphas.split(",") if item.strip()]
-    all_results: Dict[str, Any] = {"experiment": "1.1", "runs": []}
-    baseline_payload: Dict[str, Any] | None = None
-    analyzer = CascadeAnalyzer(metric_name="mean_token_entropy", epsilon=0.05)
-    summary: Dict[str, Any] = {"experiment": "1.1", "alpha_comparisons": {}}
-
-    for alpha in alphas:
-        combined_messages: List[Dict[str, Any]] = []
-        combined_uncertainty: List[Dict[str, Any]] = []
-        for task in tasks:
-            runner = CascadeTopologyRunner()
-            agent = build_agent(
-                agent_id=f"single_{task.name}",
-                role_name="steered_implementer",
-                hop=0,
-                model_name=args.model,
-                max_new_tokens=args.max_new_tokens,
-                steering_vector=args.steering_vector,
-                steering_strength=alpha,
-                steering_enabled=alpha > 0.0,
-            )
-            result = runner.run_single_agent(
-                agent=agent,
-                task_prompt=task.prompt,
-                condition=f"alpha_{alpha}",
-            )
-            payload = result.to_dict()
-            payload["task"] = asdict(task)
-            all_results["runs"].append(payload)
-            combined_messages.extend(payload["messages"])
-            combined_uncertainty.extend(payload["uncertainty"])
-
-        aggregate = {
-            "topology": "single",
-            "condition": f"alpha_{alpha}",
-            "task_prompt": "multiple_tasks",
-            "messages": combined_messages,
-            "uncertainty": combined_uncertainty,
-            "metadata": {"alpha": alpha},
-        }
-        if alpha == 0.0:
-            baseline_payload = aggregate
-        elif baseline_payload is not None:
-            summary["alpha_comparisons"][str(alpha)] = asdict(analyzer.summarize(aggregate, baseline_payload))
-
-    output_dir = args.results_dir / "exp1_1"
-    save_json(output_dir / "exp1_1_results.json", all_results)
-    save_json(output_dir / "exp1_1_summary.json", summary)
 
 
 def run_experiment_1_2(args: argparse.Namespace) -> None:
@@ -462,17 +411,16 @@ def run_experiment_1_4(args: argparse.Namespace) -> None:
 
 def main() -> None:
     args = _build_parser().parse_args()
+    require_pde_slurm_gpu_environment()
     args.results_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.experiment in {"1.2", "1.3", "1.4"} and args.clean_api_base is None and not args.allow_local_clean_models:
+    if args.clean_api_base is None:
         raise ValueError(
-            "Experiments 1.2-1.4 require --clean-api-base by default to avoid loading multiple clean model copies in one process. "
-            "Run scripts/serve_clean_model.sh and pass --clean-api-base, or override with --allow-local-clean-models for small-model smoke tests."
+            "Experiments 1.2-1.4 require --clean-api-base to avoid loading multiple model copies. "
+            "Run a PDE clean vLLM server job and pass --clean-api-base."
         )
 
-    if args.experiment == "1.1":
-        run_experiment_1_1(args)
-    elif args.experiment == "1.2":
+    if args.experiment == "1.2":
         run_experiment_1_2(args)
     elif args.experiment == "1.3":
         run_experiment_1_3(args)
