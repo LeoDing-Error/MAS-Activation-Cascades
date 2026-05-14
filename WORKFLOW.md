@@ -11,6 +11,7 @@ The project measures whether a TA2-style activation steering intervention applie
 - Execute through Slurm on the Emory Math PDE cluster.
 - Keep the repository, environment, model caches, data, results, and temporary files under `/local/scratch2/lding43`.
 - Use the `cascade` Conda environment.
+- PDE GPUs are Blackwell (`sm_120`); setup must use CUDA 12.8+ compatible PyTorch/vLLM wheels. Do not use the old CUDA 12.1 PyTorch stack.
 - Use the local editable `third_party/camel` checkout; do not install `camel-ai` from PyPI.
 - Keep generated artifacts out of git.
 
@@ -53,7 +54,7 @@ sbatch pde-setup.sbatch
 The setup chain:
 
 - creates or updates the `cascade` Conda environment
-- installs requirements into that environment
+- installs requirements into that environment with the Blackwell-compatible CUDA 12.8 PyTorch/vLLM stack
 - clones pinned TA2 and CAMEL references under `third_party/`
 - installs the local CAMEL checkout in editable mode
 - generates TA2-derived contrastive pairs
@@ -131,6 +132,8 @@ sbatch pde-vllm-70b.sbatch
 ```
 
 The PDE profile rejects 70B-class concurrent cascade jobs because the two-GPU allocation cannot host separate clean and steered 70B model copies at the same time.
+
+If vLLM fails with `NVIDIA RTX PRO 6000 Blackwell ... sm_120 is not compatible with the current PyTorch installation` or `NCCL error: unhandled cuda error`, the environment is using an incompatible CUDA/PyTorch stack. Re-run setup from the current branch so `--cuda128` is used; do not switch back to `torch==2.5.1`, CUDA 12.1, or `vllm==0.6.4`.
 
 ## 7. Review Outputs
 

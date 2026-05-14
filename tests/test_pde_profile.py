@@ -141,7 +141,7 @@ class PdeProfileTests(unittest.TestCase):
         )
 
         self.assertNotIn("#SBATCH --gres=gpu:", script)
-        self.assertIn("./scripts/setup_stack.sh --env-name cascade --cuda121", script)
+        self.assertIn("./scripts/setup_stack.sh --env-name cascade --cuda128", script)
 
     def test_serve_clean_cli_uses_tensor_parallel_layout_for_70b(self) -> None:
         script = build_pde_sbatch.render_from_args(
@@ -309,11 +309,14 @@ class PdeProfileTests(unittest.TestCase):
         requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
         setup_env = (ROOT / "scripts" / "setup_env.sh").read_text(encoding="utf-8")
 
-        self.assertIn('vllm==0.6.4.post1; platform_system == "Linux"', requirements)
+        self.assertIn('vllm>=0.9.0,<1; platform_system == "Linux"', requirements)
         self.assertIn("numpy>=1.26,<2", requirements)
-        self.assertIn("torch==2.5.1", setup_env)
-        self.assertIn("torchvision==0.20.1", setup_env)
-        self.assertIn("torchaudio==2.5.1", setup_env)
+        self.assertIn("torch==2.7.0", setup_env)
+        self.assertIn("torchvision==0.22.0", setup_env)
+        self.assertIn("torchaudio==2.7.0", setup_env)
+        self.assertIn("https://download.pytorch.org/whl/cu128", setup_env)
+        self.assertNotIn("torch==2.5.1", setup_env)
+        self.assertNotIn("https://download.pytorch.org/whl/cu121", setup_env)
         self.assertIn('"fsspec[http]<=2026.2.0,>=2023.1.0"', setup_env)
 
     def test_clean_vllm_server_disables_frontend_multiprocessing_on_pde(self) -> None:

@@ -13,6 +13,7 @@ The current PDE allocation provides:
 - 100 GB scratch under `/local/scratch2/lding43`
 
 Do not run environments, model downloads, caches, results, or temporary files from `/home/lding43`.
+These Blackwell GPUs report CUDA capability `sm_120`. The `cascade` environment must use CUDA 12.8+ compatible PyTorch/vLLM wheels. The old `torch==2.5.1` / CUDA 12.1 / `vllm==0.6.4` stack is incompatible and fails during vLLM tensor-parallel startup with `NCCL error: unhandled cuda error` after PyTorch warns that `sm_120` is unsupported.
 
 Connect through the jump host:
 

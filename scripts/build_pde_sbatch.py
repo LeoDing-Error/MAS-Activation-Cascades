@@ -73,7 +73,7 @@ def render_from_args(argv: Sequence[str]) -> str:
             job_name=args.job_name,
             netid=args.netid,
             repo_dir=args.repo_dir,
-            command=["./scripts/setup_stack.sh", "--env-name", args.env_name, "--cuda121"],
+            command=["./scripts/setup_stack.sh", "--env-name", args.env_name, "--cuda128"],
             gpu_count=0,
             time_limit="02:00:00",
         )

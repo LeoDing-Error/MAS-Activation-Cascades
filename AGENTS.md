@@ -5,6 +5,7 @@ Guidance for AI coding agents (Codex, Copilot Workspace, etc.) working in this r
 ## Environment bootstrap
 
 Always use the `cascade` conda environment. Never install packages into the base environment or with bare `pip install`.
+PDE GPU jobs run on Blackwell GPUs (`sm_120`), so the environment must use CUDA 12.8+ compatible PyTorch/vLLM wheels. Do not reinstall or pin the old `torch==2.5.1` / CUDA 12.1 / `vllm==0.6.4` stack; it only supports up to `sm_90` and fails on PDE Blackwell with NCCL initialization errors.
 
 ```bash
 python3 scripts/build_pde_sbatch.py setup \
@@ -37,6 +38,8 @@ All tests are CPU-only, but this branch still runs them through PDE Slurm.
 4. **PDE runs go through Slurm.** Do not run experiments, setup verification, model downloads, results, caches, or temporary files from `/home/lding43`.
 
 5. **Steering artifacts use `torch.load(..., weights_only=True)`.** Do not change this to the unsafe load path.
+
+6. **PDE Blackwell compatibility is mandatory.** Treat this warning as a setup bug, not a transient GPU issue: `NVIDIA RTX PRO 6000 Blackwell ... sm_120 is not compatible with the current PyTorch installation. The current PyTorch install supports ... sm_90.` The fix is a CUDA 12.8+ Blackwell-compatible PyTorch/vLLM stack, not changing nodes or bypassing tensor parallelism.
 
 ## Code conventions
 

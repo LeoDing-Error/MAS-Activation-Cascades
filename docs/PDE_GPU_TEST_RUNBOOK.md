@@ -146,6 +146,7 @@ Important constraints:
 - Do not install `camel-ai` from PyPI.
 - Do not update `third_party/refs.lock` unless you deliberately intend to change pinned third-party commits.
 - `vllm` belongs in PDE Slurm jobs for this branch.
+- PDE GPUs are Blackwell (`sm_120`). The environment must use CUDA 12.8+ compatible PyTorch/vLLM wheels. Do not use the old `torch==2.5.1` / CUDA 12.1 / `vllm==0.6.4` stack.
 
 ## 6. Generate A Slurm Test Job
 
@@ -245,6 +246,7 @@ PY
 ```
 
 Your grant allows up to two GPUs total.
+On Blackwell, this smoke check must not print a PyTorch warning that `sm_120` is unsupported. If it does, the environment is incompatible even if `torch.cuda.is_available()` returns true.
 
 ## 10. Optional 70B GPU Job Scripts
 
@@ -303,3 +305,7 @@ sbatch pde-setup.sbatch
 Slurm job exits quickly with nonzero status
 
 Open `slurm-<jobid>.out`, read the first traceback or shell error, fix that cause, and resubmit.
+
+`sm_120 is not compatible with the current PyTorch installation` or `NCCL error: unhandled cuda error`
+
+The PDE GPUs are Blackwell and require a CUDA 12.8+ compatible PyTorch/vLLM stack. This error means the environment was built with an older stack, commonly `torch==2.5.1` CUDA 12.1 or `vllm==0.6.4`, which only supports up to `sm_90`. Pull the current branch into scratch and rerun the generated setup job so it uses `--cuda128`.

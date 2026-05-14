@@ -9,6 +9,7 @@ This branch is scoped to the Emory Math PDE GPU workflow. Keep setup, testing, a
 ## Environment
 
 Always use the `cascade` Conda environment from the PDE scratch checkout. Keep Conda packages, caches, model downloads, results, and temp files under `/local/scratch2/lding43`.
+The PDE GPUs are Blackwell (`sm_120`). Use a CUDA 12.8+ compatible PyTorch/vLLM stack only; do not pin or reinstall `torch==2.5.1`, CUDA 12.1 wheels, or `vllm==0.6.4`.
 
 ```bash
 export SCRATCH=/local/scratch2/lding43
@@ -113,5 +114,6 @@ TA2 harmful.csv
 
 - Never install `camel-ai` from PyPI. Use the editable local checkout under `third_party/camel`.
 - Do not update `third_party/refs.lock` without explicit instruction.
+- Treat `sm_120 is not compatible with the current PyTorch installation` followed by `NCCL error: unhandled cuda error` as an incompatible environment stack. The fix is CUDA 12.8+ PyTorch/vLLM, not changing the experiment topology.
 - Keep steering artifacts on the restricted `torch.load(..., weights_only=True)` path.
 - Do not commit generated contrastive pairs, steering vectors, results, Slurm output, or model caches.

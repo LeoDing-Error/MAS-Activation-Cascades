@@ -4,7 +4,7 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 ENV_NAME="$DEFAULT_ENV_NAME"
-INSTALL_CUDA121=0
+INSTALL_CUDA128=0
 CAMEL_EXTRAS=""
 PAIR_DATASET="harmful"
 PAIR_LIMIT=""
@@ -16,8 +16,12 @@ while [[ $# -gt 0 ]]; do
       ENV_NAME="$2"
       shift 2
       ;;
+    --cuda128)
+      INSTALL_CUDA128=1
+      shift
+      ;;
     --cuda121)
-      INSTALL_CUDA121=1
+      fail "--cuda121 is invalid on the PDE Blackwell GPUs. Use --cuda128."
       shift
       ;;
     --camel-extras)
@@ -43,8 +47,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 setup_env_args=(--env-name "$ENV_NAME")
-if [[ "$INSTALL_CUDA121" -eq 1 ]]; then
-  setup_env_args+=(--cuda121)
+if [[ "$INSTALL_CUDA128" -eq 1 ]]; then
+  setup_env_args+=(--cuda128)
 fi
 
 setup_camel_args=(--env-name "$ENV_NAME")

@@ -4,7 +4,7 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 ENV_NAME="$DEFAULT_ENV_NAME"
-INSTALL_CUDA121=0
+INSTALL_CUDA128=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -12,8 +12,12 @@ while [[ $# -gt 0 ]]; do
       ENV_NAME="$2"
       shift 2
       ;;
+    --cuda128)
+      INSTALL_CUDA128=1
+      shift
+      ;;
     --cuda121)
-      INSTALL_CUDA121=1
+      fail "--cuda121 is invalid on the PDE Blackwell GPUs. Use --cuda128."
       shift
       ;;
     *)
@@ -38,15 +42,18 @@ pip_in_conda "$ENV_NAME" install --upgrade pip setuptools wheel
 log "Reinstalling project requirements into $ENV_NAME"
 pip_in_conda "$ENV_NAME" install -r "$PROJECT_ROOT/requirements.txt"
 
-if [[ "$INSTALL_CUDA121" -eq 1 ]]; then
+if [[ "$INSTALL_CUDA128" -eq 1 ]]; then
   if is_macos; then
-    fail "--cuda121 is only for the PDE CUDA setup"
+    fail "--cuda128 is only for the PDE CUDA setup"
   fi
-  log "Reinstalling torch stack with CUDA 12.1 wheels in $ENV_NAME"
-  pip_in_conda "$ENV_NAME" uninstall -y torch torchvision torchaudio || true
+  log "Reinstalling Blackwell-compatible torch/vLLM stack with CUDA 12.8 wheels in $ENV_NAME"
+  pip_in_conda "$ENV_NAME" uninstall -y vllm torch torchvision torchaudio || true
   pip_in_conda "$ENV_NAME" install --upgrade --force-reinstall \
-    torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
-    --index-url https://download.pytorch.org/whl/cu121
+    torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 \
+    --index-url https://download.pytorch.org/whl/cu128
+  pip_in_conda "$ENV_NAME" install --upgrade --force-reinstall \
+    "vllm>=0.9.0,<1" \
+    --extra-index-url https://download.pytorch.org/whl/cu128
   pip_in_conda "$ENV_NAME" install --upgrade --force-reinstall \
     "numpy>=1.26,<2" "fsspec[http]<=2026.2.0,>=2023.1.0"
 fi
