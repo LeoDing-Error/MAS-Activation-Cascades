@@ -107,6 +107,7 @@ VLLM_ARGS=(
   --tensor-parallel-size "$TENSOR_PARALLEL_SIZE" \
   --pipeline-parallel-size "$PIPELINE_PARALLEL_SIZE" \
   --dtype "$DTYPE"
+  --disable-frontend-multiprocessing
 )
 
 if [[ -n "$MAX_NUM_SEQS" ]]; then

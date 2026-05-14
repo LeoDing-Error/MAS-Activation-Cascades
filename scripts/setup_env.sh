@@ -47,6 +47,8 @@ if [[ "$INSTALL_CUDA121" -eq 1 ]]; then
   pip_in_conda "$ENV_NAME" install --upgrade --force-reinstall \
     torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
     --index-url https://download.pytorch.org/whl/cu121
+  pip_in_conda "$ENV_NAME" install --upgrade --force-reinstall \
+    "numpy>=1.26,<2" "fsspec[http]<=2026.2.0,>=2023.1.0"
 fi
 
 log "Environment setup complete for $ENV_NAME"

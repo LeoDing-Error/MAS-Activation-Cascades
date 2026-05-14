@@ -310,9 +310,16 @@ class PdeProfileTests(unittest.TestCase):
         setup_env = (ROOT / "scripts" / "setup_env.sh").read_text(encoding="utf-8")
 
         self.assertIn('vllm==0.6.4.post1; platform_system == "Linux"', requirements)
+        self.assertIn("numpy>=1.26,<2", requirements)
         self.assertIn("torch==2.5.1", setup_env)
         self.assertIn("torchvision==0.20.1", setup_env)
         self.assertIn("torchaudio==2.5.1", setup_env)
+        self.assertIn('"fsspec[http]<=2026.2.0,>=2023.1.0"', setup_env)
+
+    def test_clean_vllm_server_disables_frontend_multiprocessing_on_pde(self) -> None:
+        serve_script = (ROOT / "scripts" / "serve_clean_model.sh").read_text(encoding="utf-8")
+
+        self.assertIn("--disable-frontend-multiprocessing", serve_script)
 
 
 if __name__ == "__main__":
