@@ -30,10 +30,10 @@ ensure_command conda
 
 if conda_env_exists "$ENV_NAME"; then
   log "Updating conda env $ENV_NAME from environment.yml"
-  conda env update -y -n "$ENV_NAME" --file "$PROJECT_ROOT/environment.yml" --prune
+  yes | conda env update -n "$ENV_NAME" --file "$PROJECT_ROOT/environment.yml" --prune
 else
   log "Creating conda env $ENV_NAME from environment.yml"
-  conda env create -y -n "$ENV_NAME" --file "$PROJECT_ROOT/environment.yml"
+  yes | conda env create -n "$ENV_NAME" --file "$PROJECT_ROOT/environment.yml"
 fi
 
 log "Upgrading packaging tools in $ENV_NAME"
