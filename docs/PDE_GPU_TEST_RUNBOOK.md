@@ -31,7 +31,7 @@ Clone or copy the repo into scratch. Example with Git:
 
 ```bash
 cd /local/scratch2/lding43
-git clone <repo-url> MAS-Activation-Cascades
+git clone https://github.com/LeoDing-Error/MAS-Activation-Cascades.git MAS-Activation-Cascades
 cd MAS-Activation-Cascades
 ```
 
@@ -48,13 +48,14 @@ Load or initialize Conda using the PDE documentation in `/usr/local/SLURM` if ne
 
 ```bash
 export SCRATCH=/local/scratch2/lding43
-mkdir -p "$SCRATCH/conda/envs" "$SCRATCH/conda/pkgs" "$SCRATCH/.cache" "$SCRATCH/tmp"
+mkdir -p "$SCRATCH/.conda/envs" "$SCRATCH/.conda/pkgs" "$SCRATCH/.cache/pip" "$SCRATCH/tmp"
 
-export CONDA_ENVS_PATH="$SCRATCH/conda/envs"
-export CONDA_PKGS_DIRS="$SCRATCH/conda/pkgs"
+export CONDA_ENVS_PATH="$SCRATCH/.conda/envs"
+export CONDA_PKGS_DIRS="$SCRATCH/.conda/pkgs"
 export XDG_CACHE_HOME="$SCRATCH/.cache"
 export HF_HOME="$SCRATCH/.cache/huggingface"
 export TRANSFORMERS_CACHE="$SCRATCH/.cache/huggingface/transformers"
+export PIP_CACHE_DIR="$SCRATCH/.cache/pip"
 export TMPDIR="$SCRATCH/tmp"
 ```
 
@@ -105,7 +106,7 @@ Generate and submit setup from the scratch checkout:
 
 ```bash
 cd /local/scratch2/lding43/MAS-Activation-Cascades
-python scripts/build_pde_sbatch.py setup \
+python3 scripts/build_pde_sbatch.py setup \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades > pde-setup.sbatch
 sbatch pde-setup.sbatch
@@ -125,7 +126,7 @@ Generate the test job:
 
 ```bash
 cd /local/scratch2/lding43/MAS-Activation-Cascades
-python scripts/build_pde_sbatch.py pytest \
+python3 scripts/build_pde_sbatch.py pytest \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades > pde-pytest.sbatch
 ```
@@ -139,7 +140,7 @@ sed -n '1,120p' pde-pytest.sbatch
 It should:
 
 - `cd` into `/local/scratch2/lding43/MAS-Activation-Cascades`
-- export `XDG_CACHE_HOME`, `HF_HOME`, and `TRANSFORMERS_CACHE` under scratch
+- export Conda, pip, Hugging Face, and temp paths under scratch
 - run `conda run -n cascade python -m pytest tests/`
 - not request a GPU for CPU-only tests
 
@@ -181,9 +182,13 @@ Inside an allocated job shell:
 
 ```bash
 cd /local/scratch2/lding43/MAS-Activation-Cascades
+export CONDA_ENVS_PATH=/local/scratch2/lding43/.conda/envs
+export CONDA_PKGS_DIRS=/local/scratch2/lding43/.conda/pkgs
 export XDG_CACHE_HOME=/local/scratch2/lding43/.cache
 export HF_HOME=/local/scratch2/lding43/.cache/huggingface
 export TRANSFORMERS_CACHE=/local/scratch2/lding43/.cache/huggingface/transformers
+export PIP_CACHE_DIR=/local/scratch2/lding43/.cache/pip
+export TMPDIR=/local/scratch2/lding43/tmp
 conda run -n cascade python -m pytest tests/test_pde_profile.py -q
 ```
 
@@ -212,27 +217,25 @@ PY
 
 Your grant allows up to two GPUs total.
 
-## 10. Optional Experiment Job Scripts
-
-For 8B cascade experiments, generate a one-worker-lane sweep job:
-
-```bash
-python scripts/build_pde_sbatch.py sweep \
-  --netid lding43 \
-  --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
-  --model meta-llama/Meta-Llama-3.1-8B-Instruct \
-  --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
-  --clean-api-base http://clean-vllm-node:8000/v1 > pde-sweep.sbatch
-```
+## 10. Optional 70B GPU Job Scripts
 
 For a 70B-class clean vLLM server, generate a two-GPU tensor-parallel job:
 
 ```bash
-python scripts/build_pde_sbatch.py serve-clean \
+python3 scripts/build_pde_sbatch.py serve-clean \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
   --model meta-llama/Llama-3.1-70B-Instruct > pde-vllm-70b.sbatch
 ```
+
+Inspect and submit it:
+
+```bash
+sed -n '1,140p' pde-vllm-70b.sbatch
+sbatch pde-vllm-70b.sbatch
+```
+
+It should request two GPUs, set `CUDA_VISIBLE_DEVICES=0,1`, and run `./scripts/serve_clean_model.sh` with `--tensor-parallel-size 2`.
 
 The helper rejects 70B-class concurrent cascade sweeps by default. With two GPUs total, use tensor parallel for one 70B model at a time unless the experiment is redesigned to run clean and steered generations sequentially.
 
@@ -251,7 +254,7 @@ Create the scratch directory and clone or copy the repo there. Do not run from `
 Submit the setup job again:
 
 ```bash
-python scripts/build_pde_sbatch.py setup \
+python3 scripts/build_pde_sbatch.py setup \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades > pde-setup.sbatch
 sbatch pde-setup.sbatch
@@ -262,7 +265,7 @@ sbatch pde-setup.sbatch
 Run:
 
 ```bash
-python scripts/build_pde_sbatch.py setup \
+python3 scripts/build_pde_sbatch.py setup \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades > pde-setup.sbatch
 sbatch pde-setup.sbatch

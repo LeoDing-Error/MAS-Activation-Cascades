@@ -12,14 +12,17 @@ Always use the `cascade` Conda environment from the PDE scratch checkout. Keep C
 
 ```bash
 export SCRATCH=/local/scratch2/lding43
-export CONDA_ENVS_PATH="$SCRATCH/conda/envs"
-export CONDA_PKGS_DIRS="$SCRATCH/conda/pkgs"
+mkdir -p "$SCRATCH/.conda/envs" "$SCRATCH/.conda/pkgs" "$SCRATCH/.cache/pip" "$SCRATCH/tmp"
+
+export CONDA_ENVS_PATH="$SCRATCH/.conda/envs"
+export CONDA_PKGS_DIRS="$SCRATCH/.conda/pkgs"
 export XDG_CACHE_HOME="$SCRATCH/.cache"
 export HF_HOME="$SCRATCH/.cache/huggingface"
 export TRANSFORMERS_CACHE="$SCRATCH/.cache/huggingface/transformers"
+export PIP_CACHE_DIR="$SCRATCH/.cache/pip"
 export TMPDIR="$SCRATCH/tmp"
 
-python scripts/build_pde_sbatch.py setup \
+python3 scripts/build_pde_sbatch.py setup \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades > pde-setup.sbatch
 sbatch pde-setup.sbatch
@@ -30,7 +33,7 @@ sbatch pde-setup.sbatch
 Render and submit the PDE Slurm test job:
 
 ```bash
-python scripts/build_pde_sbatch.py pytest \
+python3 scripts/build_pde_sbatch.py pytest \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades > pde-pytest.sbatch
 sbatch pde-pytest.sbatch
@@ -43,7 +46,7 @@ The test suite is CPU-only, but PDE computation still goes through Slurm.
 ### 8B Steering Vector
 
 ```bash
-python scripts/build_pde_sbatch.py compute-vector \
+python3 scripts/build_pde_sbatch.py compute-vector \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
   --model meta-llama/Meta-Llama-3.1-8B-Instruct > pde-vector.sbatch
@@ -58,7 +61,7 @@ Use the supported two-GPU PDE layout:
 - GPU 1: one steered worker lane
 
 ```bash
-python scripts/build_pde_sbatch.py sweep \
+python3 scripts/build_pde_sbatch.py sweep \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
   --model meta-llama/Meta-Llama-3.1-8B-Instruct \
@@ -72,7 +75,7 @@ sbatch pde-sweep.sbatch
 Use both PDE GPUs for one 70B-class model process:
 
 ```bash
-python scripts/build_pde_sbatch.py serve-clean \
+python3 scripts/build_pde_sbatch.py serve-clean \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
   --model meta-llama/Llama-3.1-70B-Instruct > pde-vllm-70b.sbatch

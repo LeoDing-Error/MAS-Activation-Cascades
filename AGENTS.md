@@ -7,7 +7,7 @@ Guidance for AI coding agents (Codex, Copilot Workspace, etc.) working in this r
 Always use the `cascade` conda environment. Never install packages into the base environment or with bare `pip install`.
 
 ```bash
-python scripts/build_pde_sbatch.py setup \
+python3 scripts/build_pde_sbatch.py setup \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades > pde-setup.sbatch
 sbatch pde-setup.sbatch
@@ -18,7 +18,7 @@ Submit the Slurm test job below after setup.
 ## Running tests
 
 ```bash
-python scripts/build_pde_sbatch.py pytest \
+python3 scripts/build_pde_sbatch.py pytest \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades > pde-pytest.sbatch
 sbatch pde-pytest.sbatch

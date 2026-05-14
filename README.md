@@ -27,28 +27,29 @@ Clone or copy the repo into scratch:
 ```bash
 mkdir -p /local/scratch2/lding43
 cd /local/scratch2/lding43
-git clone <repo-url> MAS-Activation-Cascades
+git clone https://github.com/LeoDing-Error/MAS-Activation-Cascades.git MAS-Activation-Cascades
 cd MAS-Activation-Cascades
 ```
 
-Keep Conda packages, Python caches, Hugging Face caches, and temp files in scratch:
+Keep Conda environments, Conda packages, pip cache, Python caches, Hugging Face caches, and temp files in scratch:
 
 ```bash
 export SCRATCH=/local/scratch2/lding43
-mkdir -p "$SCRATCH/conda/envs" "$SCRATCH/conda/pkgs" "$SCRATCH/.cache" "$SCRATCH/tmp"
+mkdir -p "$SCRATCH/.conda/envs" "$SCRATCH/.conda/pkgs" "$SCRATCH/.cache/pip" "$SCRATCH/tmp"
 
-export CONDA_ENVS_PATH="$SCRATCH/conda/envs"
-export CONDA_PKGS_DIRS="$SCRATCH/conda/pkgs"
+export CONDA_ENVS_PATH="$SCRATCH/.conda/envs"
+export CONDA_PKGS_DIRS="$SCRATCH/.conda/pkgs"
 export XDG_CACHE_HOME="$SCRATCH/.cache"
 export HF_HOME="$SCRATCH/.cache/huggingface"
 export TRANSFORMERS_CACHE="$SCRATCH/.cache/huggingface/transformers"
+export PIP_CACHE_DIR="$SCRATCH/.cache/pip"
 export TMPDIR="$SCRATCH/tmp"
 ```
 
 Generate and submit the scratch-local setup job:
 
 ```bash
-python scripts/build_pde_sbatch.py setup \
+python3 scripts/build_pde_sbatch.py setup \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades > pde-setup.sbatch
 sbatch pde-setup.sbatch
@@ -59,7 +60,7 @@ sbatch pde-setup.sbatch
 Generate a CPU-only test job:
 
 ```bash
-python scripts/build_pde_sbatch.py pytest \
+python3 scripts/build_pde_sbatch.py pytest \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades > pde-pytest.sbatch
 sbatch pde-pytest.sbatch
@@ -68,7 +69,7 @@ sbatch pde-pytest.sbatch
 Generate the 8B steering-vector job:
 
 ```bash
-python scripts/build_pde_sbatch.py compute-vector \
+python3 scripts/build_pde_sbatch.py compute-vector \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
   --model meta-llama/Meta-Llama-3.1-8B-Instruct > pde-vector.sbatch
@@ -78,7 +79,7 @@ sbatch pde-vector.sbatch
 Generate an 8B cascade sweep job. Start a PDE clean vLLM server first, then pass its reachable node endpoint to the sweep:
 
 ```bash
-python scripts/build_pde_sbatch.py sweep \
+python3 scripts/build_pde_sbatch.py sweep \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
   --model meta-llama/Meta-Llama-3.1-8B-Instruct \
@@ -90,7 +91,7 @@ sbatch pde-sweep.sbatch
 Generate a two-GPU tensor-parallel clean server job for a 70B-class model:
 
 ```bash
-python scripts/build_pde_sbatch.py serve-clean \
+python3 scripts/build_pde_sbatch.py serve-clean \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
   --model meta-llama/Llama-3.1-70B-Instruct > pde-vllm-70b.sbatch

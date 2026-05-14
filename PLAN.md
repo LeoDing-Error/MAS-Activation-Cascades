@@ -125,7 +125,7 @@ Measurements:
 
 ```bash
 cd /local/scratch2/lding43/MAS-Activation-Cascades
-python scripts/build_pde_sbatch.py setup \
+python3 scripts/build_pde_sbatch.py setup \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades > pde-setup.sbatch
 sbatch pde-setup.sbatch
@@ -134,7 +134,7 @@ sbatch pde-setup.sbatch
 ### Test Job
 
 ```bash
-python scripts/build_pde_sbatch.py pytest \
+python3 scripts/build_pde_sbatch.py pytest \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades > pde-pytest.sbatch
 sbatch pde-pytest.sbatch
@@ -149,7 +149,7 @@ The PDE setup job generates `data/contrastive_pairs/ta2_harmful_pairs.json`.
 Generate and submit the PDE steering-vector job:
 
 ```bash
-python scripts/build_pde_sbatch.py compute-vector \
+python3 scripts/build_pde_sbatch.py compute-vector \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
   --model meta-llama/Meta-Llama-3.1-8B-Instruct > pde-vector.sbatch
@@ -159,7 +159,7 @@ sbatch pde-vector.sbatch
 ### Run 8B Cascade Sweep
 
 ```bash
-python scripts/build_pde_sbatch.py sweep \
+python3 scripts/build_pde_sbatch.py sweep \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
   --model meta-llama/Meta-Llama-3.1-8B-Instruct \
@@ -174,7 +174,7 @@ sbatch pde-sweep.sbatch
 ### Serve 70B With Tensor Parallelism
 
 ```bash
-python scripts/build_pde_sbatch.py serve-clean \
+python3 scripts/build_pde_sbatch.py serve-clean \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
   --model meta-llama/Llama-3.1-70B-Instruct > pde-vllm-70b.sbatch

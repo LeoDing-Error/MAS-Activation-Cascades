@@ -246,10 +246,41 @@ class PdeProfileTests(unittest.TestCase):
         self.assertIn('"/local/scratch2/lding43"', runbook)
         self.assertIn(".vscode-server", runbook)
         self.assertIn("files.watcherExclude", runbook)
-        self.assertIn("python scripts/build_pde_sbatch.py setup", runbook)
+        self.assertIn("python3 scripts/build_pde_sbatch.py setup", runbook)
         self.assertIn("sbatch pde-setup.sbatch", runbook)
-        self.assertIn("python scripts/build_pde_sbatch.py pytest", runbook)
+        self.assertIn("python3 scripts/build_pde_sbatch.py pytest", runbook)
         self.assertIn("sbatch pde-pytest.sbatch", runbook)
+
+    def test_runbook_matches_generated_scratch_runtime_paths(self) -> None:
+        runbook = (ROOT / "docs" / "PDE_GPU_TEST_RUNBOOK.md").read_text(encoding="utf-8")
+
+        self.assertIn('mkdir -p "$SCRATCH/.conda/envs"', runbook)
+        self.assertIn('export CONDA_ENVS_PATH="$SCRATCH/.conda/envs"', runbook)
+        self.assertIn('export CONDA_PKGS_DIRS="$SCRATCH/.conda/pkgs"', runbook)
+        self.assertIn('export PIP_CACHE_DIR="$SCRATCH/.cache/pip"', runbook)
+        self.assertNotIn("$SCRATCH/conda/envs", runbook)
+        self.assertNotIn("$SCRATCH/conda/pkgs", runbook)
+
+    def test_cluster_docs_match_generated_scratch_runtime_paths(self) -> None:
+        for relative_path in ("README.md", "CLAUDE.md", "WORKFLOW.md"):
+            with self.subTest(path=relative_path):
+                document = (ROOT / relative_path).read_text(encoding="utf-8")
+
+                self.assertIn('mkdir -p "$SCRATCH/.conda/envs"', document)
+                self.assertIn('export CONDA_ENVS_PATH="$SCRATCH/.conda/envs"', document)
+                self.assertIn('export CONDA_PKGS_DIRS="$SCRATCH/.conda/pkgs"', document)
+                self.assertIn('export PIP_CACHE_DIR="$SCRATCH/.cache/pip"', document)
+                self.assertNotIn("$SCRATCH/conda/envs", document)
+                self.assertNotIn("$SCRATCH/conda/pkgs", document)
+
+    def test_runbook_keeps_optional_experiments_on_70b_tensor_parallel_path(self) -> None:
+        runbook = (ROOT / "docs" / "PDE_GPU_TEST_RUNBOOK.md").read_text(encoding="utf-8")
+
+        self.assertIn("70B-class clean vLLM server", runbook)
+        self.assertIn("meta-llama/Llama-3.1-70B-Instruct", runbook)
+        self.assertIn("pde-vllm-70b.sbatch", runbook)
+        self.assertNotIn("Meta-Llama-3.1-8B-Instruct", runbook)
+        self.assertNotIn("pde-sweep.sbatch", runbook)
 
     def test_setup_scripts_keep_package_installs_inside_cascade_conda_env(self) -> None:
         setup_env = (ROOT / "scripts" / "setup_env.sh").read_text(encoding="utf-8")

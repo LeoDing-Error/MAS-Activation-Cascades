@@ -21,7 +21,7 @@ ssh -J lding43@lab0z.mathcs.emory.edu lding43@pdelogin.mathcs.emory.edu
 
 mkdir -p /local/scratch2/lding43
 cd /local/scratch2/lding43
-git clone <repo-url> MAS-Activation-Cascades
+git clone https://github.com/LeoDing-Error/MAS-Activation-Cascades.git MAS-Activation-Cascades
 cd MAS-Activation-Cascades
 ```
 
@@ -29,20 +29,21 @@ Set scratch-backed runtime paths:
 
 ```bash
 export SCRATCH=/local/scratch2/lding43
-mkdir -p "$SCRATCH/conda/envs" "$SCRATCH/conda/pkgs" "$SCRATCH/.cache" "$SCRATCH/tmp"
+mkdir -p "$SCRATCH/.conda/envs" "$SCRATCH/.conda/pkgs" "$SCRATCH/.cache/pip" "$SCRATCH/tmp"
 
-export CONDA_ENVS_PATH="$SCRATCH/conda/envs"
-export CONDA_PKGS_DIRS="$SCRATCH/conda/pkgs"
+export CONDA_ENVS_PATH="$SCRATCH/.conda/envs"
+export CONDA_PKGS_DIRS="$SCRATCH/.conda/pkgs"
 export XDG_CACHE_HOME="$SCRATCH/.cache"
 export HF_HOME="$SCRATCH/.cache/huggingface"
 export TRANSFORMERS_CACHE="$SCRATCH/.cache/huggingface/transformers"
+export PIP_CACHE_DIR="$SCRATCH/.cache/pip"
 export TMPDIR="$SCRATCH/tmp"
 ```
 
 ## 2. Bootstrap The Stack
 
 ```bash
-python scripts/build_pde_sbatch.py setup \
+python3 scripts/build_pde_sbatch.py setup \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades > pde-setup.sbatch
 
@@ -61,7 +62,7 @@ The setup chain:
 ## 3. Submit The Test Job
 
 ```bash
-python scripts/build_pde_sbatch.py pytest \
+python3 scripts/build_pde_sbatch.py pytest \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades > pde-pytest.sbatch
 
@@ -83,7 +84,7 @@ The PDE setup job generates TA2-derived contrastive pairs at `data/contrastive_p
 Generate and submit the PDE steering-vector job:
 
 ```bash
-python scripts/build_pde_sbatch.py compute-vector \
+python3 scripts/build_pde_sbatch.py compute-vector \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
   --model meta-llama/Meta-Llama-3.1-8B-Instruct > pde-vector.sbatch
@@ -101,7 +102,7 @@ Outputs:
 For 8B cascade experiments, use GPU 0 for the clean vLLM server and GPU 1 for one steered worker lane:
 
 ```bash
-python scripts/build_pde_sbatch.py sweep \
+python3 scripts/build_pde_sbatch.py sweep \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
   --model meta-llama/Meta-Llama-3.1-8B-Instruct \
@@ -121,7 +122,7 @@ The multi-agent runner requires an explicit clean API base from a running PDE cl
 For a 70B-class model, use both PDE GPUs for one tensor-parallel process:
 
 ```bash
-python scripts/build_pde_sbatch.py serve-clean \
+python3 scripts/build_pde_sbatch.py serve-clean \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
   --model meta-llama/Llama-3.1-70B-Instruct > pde-vllm-70b.sbatch
