@@ -300,6 +300,9 @@ class PdeProfileTests(unittest.TestCase):
         setup_camel = (ROOT / "scripts" / "setup_camel.sh").read_text(encoding="utf-8")
 
         self.assertNotRegex(setup_env, r"(^|\s)pip install")
+        self.assertNotIn("yes | conda env", setup_env)
+        self.assertIn("printf 'y\\n' | conda env update", setup_env)
+        self.assertIn("printf 'y\\n' | conda env create", setup_env)
         self.assertIn('pip_in_conda "$ENV_NAME" install -r "$PROJECT_ROOT/requirements.txt"', setup_env)
         self.assertIn('pip_in_conda "$ENV_NAME" uninstall -y camel-ai || true', setup_camel)
         self.assertIn('cd "$CAMEL_DIR"', setup_camel)
