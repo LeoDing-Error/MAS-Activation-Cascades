@@ -45,7 +45,7 @@ if [[ "$INSTALL_CUDA121" -eq 1 ]]; then
   log "Reinstalling torch stack with CUDA 12.1 wheels in $ENV_NAME"
   pip_in_conda "$ENV_NAME" uninstall -y torch torchvision torchaudio || true
   pip_in_conda "$ENV_NAME" install --upgrade --force-reinstall \
-    torch torchvision torchaudio \
+    torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
     --index-url https://download.pytorch.org/whl/cu121
 fi
 

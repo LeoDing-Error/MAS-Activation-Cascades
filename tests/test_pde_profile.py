@@ -305,6 +305,15 @@ class PdeProfileTests(unittest.TestCase):
         self.assertIn('cd "$CAMEL_DIR"', setup_camel)
         self.assertIn('pip_in_conda "$ENV_NAME" install -e .', setup_camel)
 
+    def test_pde_vllm_and_cuda_torch_stack_are_pinned_compatibly(self) -> None:
+        requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+        setup_env = (ROOT / "scripts" / "setup_env.sh").read_text(encoding="utf-8")
+
+        self.assertIn('vllm==0.6.4.post1; platform_system == "Linux"', requirements)
+        self.assertIn("torch==2.5.1", setup_env)
+        self.assertIn("torchvision==0.20.1", setup_env)
+        self.assertIn("torchaudio==2.5.1", setup_env)
+
 
 if __name__ == "__main__":
     unittest.main()
