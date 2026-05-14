@@ -107,6 +107,20 @@ def render_sbatch_script(
         f"export TRANSFORMERS_CACHE={scratch_root}/.cache/huggingface/transformers",
         f"export PIP_CACHE_DIR={scratch_root}/.cache/pip",
         f"export TMPDIR={scratch_root}/tmp",
+        "",
+        f"CONDA_BASE={scratch_root}/miniconda3",
+        'if [[ ! -x "${CONDA_BASE}/bin/conda" ]]; then',
+        '  echo "[setup][error] Missing scratch Miniconda at ${CONDA_BASE}/bin/conda. Install it using /usr/local/SLURM/conda-instructions.md." >&2',
+        "  exit 1",
+        "fi",
+        'if __conda_setup="$("${CONDA_BASE}/bin/conda" shell.bash hook 2> /dev/null)"; then',
+        '  eval "$__conda_setup"',
+        'elif [[ -f "${CONDA_BASE}/etc/profile.d/conda.sh" ]]; then',
+        '  . "${CONDA_BASE}/etc/profile.d/conda.sh"',
+        "else",
+        '  export PATH="${CONDA_BASE}/bin:$PATH"',
+        "fi",
+        "unset __conda_setup",
     ]
     if gpu_count > 0:
         lines.insert(2, f"#SBATCH --gres=gpu:{gpu_count}")

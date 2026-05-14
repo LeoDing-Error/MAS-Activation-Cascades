@@ -31,20 +31,49 @@ Clone or copy the repo into scratch. Example with Git:
 
 ```bash
 cd /local/scratch2/lding43
-git clone https://github.com/LeoDing-Error/MAS-Activation-Cascades.git MAS-Activation-Cascades
+git clone --branch 3.1-70B https://github.com/LeoDing-Error/MAS-Activation-Cascades.git MAS-Activation-Cascades
 cd MAS-Activation-Cascades
+git branch --show-current
 ```
 
 If the repo already exists:
 
 ```bash
 cd /local/scratch2/lding43/MAS-Activation-Cascades
-git pull
+git fetch origin
+git checkout 3.1-70B
+git pull origin 3.1-70B
+git branch --show-current
 ```
 
 ## 3. Keep Conda And Caches In Scratch
 
-Load or initialize Conda using the PDE documentation in `/usr/local/SLURM` if needed. Then keep Conda environments, packages, Python caches, Hugging Face caches, and temp files in scratch:
+Install Miniconda into scratch if it is not already available:
+
+```bash
+cd /local/scratch2/lding43
+test -x /local/scratch2/lding43/miniconda3/bin/conda || {
+  wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda3.sh
+  sh miniconda3.sh -b -u -p /local/scratch2/lding43/miniconda3
+}
+```
+
+Initialize Conda in your current shell:
+
+```bash
+CONDA_BASE=/local/scratch2/lding43/miniconda3
+if __conda_setup="$("${CONDA_BASE}/bin/conda" shell.bash hook 2> /dev/null)"; then
+  eval "$__conda_setup"
+elif [[ -f "${CONDA_BASE}/etc/profile.d/conda.sh" ]]; then
+  . "${CONDA_BASE}/etc/profile.d/conda.sh"
+else
+  export PATH="${CONDA_BASE}/bin:$PATH"
+fi
+unset __conda_setup
+conda --version
+```
+
+Then keep Conda environments, packages, Python caches, Hugging Face caches, and temp files in scratch:
 
 ```bash
 export SCRATCH=/local/scratch2/lding43

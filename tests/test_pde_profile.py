@@ -92,6 +92,19 @@ class PdeProfileTests(unittest.TestCase):
         self.assertIn("cd /local/scratch2/lding/MAS-Activation-Cascades", script)
         self.assertIn("conda run -n cascade python -m pytest tests/", script)
 
+    def test_render_sbatch_script_initializes_scratch_miniconda(self) -> None:
+        script = render_sbatch_script(
+            job_name="cascade-tests",
+            netid="lding",
+            repo_dir="/local/scratch2/lding/MAS-Activation-Cascades",
+            command=["conda", "run", "-n", "cascade", "python", "-m", "pytest", "tests/"],
+            gpu_count=0,
+        )
+
+        self.assertIn("CONDA_BASE=/local/scratch2/lding/miniconda3", script)
+        self.assertIn('"${CONDA_BASE}/bin/conda" shell.bash hook', script)
+        self.assertIn('export PATH="${CONDA_BASE}/bin:$PATH"', script)
+
     def test_render_sbatch_script_rejects_more_than_two_gpus(self) -> None:
         with self.assertRaisesRegex(ValueError, "at most 2 GPUs"):
             render_sbatch_script(
