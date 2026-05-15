@@ -346,7 +346,7 @@ class PdeProfileTests(unittest.TestCase):
             ]
         )
 
-        self.assertIn("--quantization awq", script)
+        self.assertIn("--quantization awq hugging-quants/", script)
 
     def test_serve_clean_cli_omits_quantization_flag_by_default(self) -> None:
         script = build_pde_sbatch.render_from_args(
@@ -367,7 +367,7 @@ class PdeProfileTests(unittest.TestCase):
         serve_script = (ROOT / "scripts" / "serve_clean_model.sh").read_text(encoding="utf-8")
 
         self.assertIn("--quantization)", serve_script)
-        self.assertIn("QUANTIZATION", serve_script)
+        self.assertIn('VLLM_ARGS+=(--quantization "$QUANTIZATION")', serve_script)
 
 
 if __name__ == "__main__":

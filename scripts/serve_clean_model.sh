@@ -21,7 +21,7 @@ QUANTIZATION="${VLLM_QUANTIZATION:-}"
 
 usage() {
   cat <<EOF
-Usage: $0 [--env-name NAME] [--tensor-parallel-size N] [--pipeline-parallel-size N] [model-name]
+Usage: $0 [--env-name NAME] [--tensor-parallel-size N] [--pipeline-parallel-size N] [--quantization SCHEME] [model-name]
 EOF
 }
 
