@@ -7,6 +7,12 @@ Guidance for AI coding agents (Codex, Copilot Workspace, etc.) working in this r
 Always use the `cascade` conda environment. Never install packages into the base environment or with bare `pip install`.
 PDE GPU jobs run on Blackwell GPUs (`sm_120`), so the environment must use CUDA 12.8+ compatible PyTorch/vLLM wheels. Do not reinstall or pin the old `torch==2.5.1` / CUDA 12.1 / `vllm==0.6.4` stack; it only supports up to `sm_90` and fails on PDE Blackwell with NCCL initialization errors.
 
+Connect to the PDE login node through the Emory MathCS jump host:
+
+```bash
+ssh -J lding43@lab0z.mathcs.emory.edu lding43@pdelogin.mathcs.emory.edu
+```
+
 ```bash
 python3 scripts/build_pde_sbatch.py setup \
   --netid lding43 \
@@ -26,6 +32,31 @@ sbatch pde-pytest.sbatch
 ```
 
 All tests are CPU-only, but this branch still runs them through PDE Slurm.
+
+## 70B GPU Serving
+
+Default (BF16, ~140 GB on disk — requires >140 GB scratch):
+
+```bash
+python3 scripts/build_pde_sbatch.py serve-clean \
+  --netid lding43 \
+  --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
+  --model meta-llama/Llama-3.1-70B-Instruct > pde-vllm-70b.sbatch
+sbatch pde-vllm-70b.sbatch
+```
+
+Storage-constrained alternative (AWQ INT4, ~38 GB on disk — fits ~100 GB scratch):
+
+```bash
+python3 scripts/build_pde_sbatch.py serve-clean \
+  --netid lding43 \
+  --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
+  --model hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4 \
+  --quantization awq > pde-vllm-70b.sbatch
+sbatch pde-vllm-70b.sbatch
+```
+
+Scratch budget with AWQ: conda env ~20 GB + 8B BF16 ~16 GB + 70B AWQ INT4 ~38 GB + caches/results ~10 GB ≈ 84 GB.
 
 ## Critical invariants
 

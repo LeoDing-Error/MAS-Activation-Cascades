@@ -85,6 +85,17 @@ sbatch pde-vllm-70b.sbatch
 
 The PDE helper rejects 70B-class concurrent cascade sweeps because clean 70B plus steered 70B co-residency does not fit the two-GPU allocation.
 
+**Storage-constrained alternative (~100 GB scratch):** Download ~38 GB instead of ~140 GB BF16:
+
+```bash
+python3 scripts/build_pde_sbatch.py serve-clean \
+  --netid lding43 \
+  --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
+  --model hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4 \
+  --quantization awq > pde-vllm-70b.sbatch
+sbatch pde-vllm-70b.sbatch
+```
+
 ## Architecture
 
 ### Data Flow
