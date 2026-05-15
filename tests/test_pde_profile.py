@@ -313,19 +313,61 @@ class PdeProfileTests(unittest.TestCase):
         setup_env = (ROOT / "scripts" / "setup_env.sh").read_text(encoding="utf-8")
 
         self.assertIn('vllm>=0.9.0,<1; platform_system == "Linux"', requirements)
-        self.assertIn("numpy>=1.26,<2", requirements)
+        self.assertIn("numpy>=2,<2.3", requirements)
         self.assertIn("torch==2.7.0", setup_env)
         self.assertIn("torchvision==0.22.0", setup_env)
         self.assertIn("torchaudio==2.7.0", setup_env)
+        self.assertIn("VLLM_CUDA128_VERSION", setup_env)
+        self.assertIn("+cu128-cp38-abi3-manylinux_2_31_x86_64.whl", setup_env)
+        self.assertIn("uninstall -y vllm xformers outlines torch torchvision torchaudio", setup_env)
         self.assertIn("https://download.pytorch.org/whl/cu128", setup_env)
         self.assertNotIn("torch==2.5.1", setup_env)
         self.assertNotIn("https://download.pytorch.org/whl/cu121", setup_env)
+        self.assertIn('"numpy>=2,<2.3"', setup_env)
         self.assertIn('"fsspec[http]<=2026.2.0,>=2023.1.0"', setup_env)
 
     def test_clean_vllm_server_disables_frontend_multiprocessing_on_pde(self) -> None:
         serve_script = (ROOT / "scripts" / "serve_clean_model.sh").read_text(encoding="utf-8")
 
         self.assertIn("--disable-frontend-multiprocessing", serve_script)
+
+    def test_serve_clean_cli_passes_quantization_flag_when_specified(self) -> None:
+        script = build_pde_sbatch.render_from_args(
+            [
+                "serve-clean",
+                "--netid",
+                "lding",
+                "--repo-dir",
+                "/local/scratch2/lding/MAS-Activation-Cascades",
+                "--model",
+                "hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4",
+                "--quantization",
+                "awq",
+            ]
+        )
+
+        self.assertIn("--quantization awq", script)
+
+    def test_serve_clean_cli_omits_quantization_flag_by_default(self) -> None:
+        script = build_pde_sbatch.render_from_args(
+            [
+                "serve-clean",
+                "--netid",
+                "lding",
+                "--repo-dir",
+                "/local/scratch2/lding/MAS-Activation-Cascades",
+                "--model",
+                "meta-llama/Llama-3.1-70B-Instruct",
+            ]
+        )
+
+        self.assertNotIn("--quantization", script)
+
+    def test_serve_clean_model_script_handles_quantization_flag(self) -> None:
+        serve_script = (ROOT / "scripts" / "serve_clean_model.sh").read_text(encoding="utf-8")
+
+        self.assertIn("--quantization)", serve_script)
+        self.assertIn("QUANTIZATION", serve_script)
 
 
 if __name__ == "__main__":

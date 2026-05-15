@@ -38,6 +38,7 @@ def _build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--host", default="0.0.0.0")
     serve_parser.add_argument("--port", default="8000")
     serve_parser.add_argument("--max-model-len", default="4096")
+    serve_parser.add_argument("--quantization", default=None, help="vLLM quantization scheme, e.g. awq, gptq, fp8")
 
     vector_parser = subparsers.add_parser("compute-vector", help="Render a PDE steering-vector job")
     _add_common_args(vector_parser)
@@ -101,8 +102,10 @@ def render_from_args(argv: Sequence[str]) -> str:
             args.port,
             "--max-model-len",
             args.max_model_len,
-            args.model,
         ]
+        if args.quantization:
+            command += ["--quantization", args.quantization]
+        command.append(args.model)
         return render_sbatch_script(
             job_name=args.job_name,
             netid=args.netid,

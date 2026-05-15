@@ -17,6 +17,7 @@ SERVED_MODEL_NAME="${VLLM_SERVED_MODEL_NAME:-}"
 DOWNLOAD_DIR="${VLLM_DOWNLOAD_DIR:-}"
 SWAP_SPACE="${VLLM_SWAP_SPACE:-}"
 ENFORCE_EAGER="${VLLM_ENFORCE_EAGER:-0}"
+QUANTIZATION="${VLLM_QUANTIZATION:-}"
 
 usage() {
   cat <<EOF
@@ -78,6 +79,10 @@ while [[ $# -gt 0 ]]; do
       ENFORCE_EAGER=1
       shift
       ;;
+    --quantization)
+      QUANTIZATION="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -124,6 +129,9 @@ if [[ -n "$SWAP_SPACE" ]]; then
 fi
 if [[ "$ENFORCE_EAGER" == "1" ]]; then
   VLLM_ARGS+=(--enforce-eager)
+fi
+if [[ -n "$QUANTIZATION" ]]; then
+  VLLM_ARGS+=(--quantization "$QUANTIZATION")
 fi
 
 python_in_conda "$ENV_NAME" "${VLLM_ARGS[@]}"
