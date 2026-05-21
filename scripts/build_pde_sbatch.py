@@ -38,7 +38,7 @@ def _build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--host", default="0.0.0.0")
     serve_parser.add_argument("--port", default="8000")
     serve_parser.add_argument("--max-model-len", default="4096")
-    serve_parser.add_argument("--quantization", default=None, help="vLLM quantization scheme, e.g. awq, gptq, fp8")
+    serve_parser.add_argument("--quantization", default=None, help="vLLM quantization scheme, e.g. awq_marlin, awq, gptq, fp8")
 
     vector_parser = subparsers.add_parser("compute-vector", help="Render a PDE steering-vector job")
     _add_common_args(vector_parser)
@@ -63,6 +63,29 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         help="OpenAI-compatible endpoint from a running PDE clean vLLM server job, e.g. http://clean-vllm-node:8000/v1",
     )
+
+    cascade_parser = subparsers.add_parser(
+        "cascade",
+        help="Render a self-hosted 2-GPU cascade sweep (clean server + steered worker in one job)",
+    )
+    _add_common_args(cascade_parser)
+    cascade_parser.add_argument("--job-name", default="cascade-2gpu")
+    cascade_parser.add_argument("--model", default=PRIMARY_MODEL)
+    cascade_parser.add_argument(
+        "--quantization",
+        default=None,
+        help="vLLM/HF quantization scheme (e.g. awq_marlin, fp8); required for a 70B cascade so each model fits one GPU",
+    )
+    cascade_parser.add_argument("--steering-vector", required=True)
+    cascade_parser.add_argument("--experiments", default="1.2,1.3,1.4")
+    cascade_parser.add_argument("--steering-strengths", default="1.0")
+    cascade_parser.add_argument("--task-indices", default=None)
+    cascade_parser.add_argument("--repeats", default="1")
+    cascade_parser.add_argument("--port", default="8000")
+    cascade_parser.add_argument("--max-model-len", default="4096")
+    cascade_parser.add_argument("--max-new-tokens", default="256")
+    cascade_parser.add_argument("--chat-turn-limit", default="2")
+    cascade_parser.add_argument("--resume", action="store_true")
     return parser
 
 
@@ -175,6 +198,45 @@ def render_from_args(argv: Sequence[str]) -> str:
             time_limit="08:00:00",
             mem="64G",
             cuda_visible_devices=layout.worker_gpu_sets[0],
+        )
+
+    if args.command_name == "cascade":
+        layout = build_pde_layout(
+            model_name=args.model,
+            mode="cascade",
+            quantization=args.quantization,
+        )
+        command = [
+            "bash",
+            "./scripts/run_cascade_2gpu.sh",
+            "--env-name", args.env_name,
+            "--model", args.model,
+            "--steering-vector", args.steering_vector,
+            "--experiments", args.experiments,
+            "--steering-strengths", args.steering_strengths,
+            "--repeats", args.repeats,
+            "--port", args.port,
+            "--max-model-len", args.max_model_len,
+            "--max-new-tokens", args.max_new_tokens,
+            "--chat-turn-limit", args.chat_turn_limit,
+            "--clean-gpu", layout.clean_server_gpu_set,
+            "--worker-gpu", layout.worker_gpu_sets[0],
+        ]
+        if args.quantization:
+            command += ["--quantization", args.quantization]
+        if args.task_indices:
+            command += ["--task-indices", args.task_indices]
+        if args.resume:
+            command += ["--resume"]
+        return render_sbatch_script(
+            job_name=args.job_name,
+            netid=args.netid,
+            repo_dir=args.repo_dir,
+            command=command,
+            gpu_count=2,
+            time_limit="08:00:00",
+            mem="96G",
+            cuda_visible_devices=None,
         )
 
     raise ValueError(f"Unsupported command: {args.command_name}")

@@ -5,7 +5,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 ENV_NAME="$DEFAULT_ENV_NAME"
 INSTALL_CUDA128=0
-VLLM_CUDA128_VERSION="${VLLM_CUDA128_VERSION:-0.20.2}"
+VLLM_CUDA129_VERSION="${VLLM_CUDA129_VERSION:-${VLLM_CUDA128_VERSION:-0.20.2}}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -47,14 +47,14 @@ if [[ "$INSTALL_CUDA128" -eq 1 ]]; then
   if is_macos; then
     fail "--cuda128 is only for the PDE CUDA setup"
   fi
-  log "Reinstalling Blackwell-compatible torch/vLLM stack with CUDA 12.8 wheels in $ENV_NAME"
+  log "Reinstalling Blackwell-compatible torch/vLLM stack with CUDA 12.8+ wheels in $ENV_NAME"
   pip_in_conda "$ENV_NAME" uninstall -y vllm xformers outlines torch torchvision torchaudio || true
   pip_in_conda "$ENV_NAME" install --upgrade --force-reinstall \
-    torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 \
-    --index-url https://download.pytorch.org/whl/cu128
+    torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 \
+    --index-url https://download.pytorch.org/whl/cu129
   pip_in_conda "$ENV_NAME" install --upgrade --force-reinstall \
-    "https://github.com/vllm-project/vllm/releases/download/v${VLLM_CUDA128_VERSION}/vllm-${VLLM_CUDA128_VERSION}+cu128-cp38-abi3-manylinux_2_31_x86_64.whl" \
-    --extra-index-url https://download.pytorch.org/whl/cu128
+    "https://github.com/vllm-project/vllm/releases/download/v${VLLM_CUDA129_VERSION}/vllm-${VLLM_CUDA129_VERSION}%2Bcu129-cp38-abi3-manylinux_2_31_x86_64.whl" \
+    --extra-index-url https://download.pytorch.org/whl/cu129
   pip_in_conda "$ENV_NAME" install --upgrade --force-reinstall \
     "numpy>=2,<2.3" "fsspec[http]<=2026.2.0,>=2023.1.0"
 fi

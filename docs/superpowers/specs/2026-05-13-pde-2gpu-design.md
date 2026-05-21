@@ -16,7 +16,7 @@ The profile must reject 70B-class concurrent cascade layouts because clean 70B p
 ## Components
 
 - `src/cluster/pde_profile.py`: pure Python helpers for detecting 70B-class model names, validating scratch paths, building PDE layouts, and rendering Slurm scripts.
-- `scripts/build_pde_sbatch.py`: CLI that prints Slurm job scripts for setup/test jobs and guarded experiment jobs.
+- `scripts/build_pde_sbatch.py`: CLI that prints Slurm job scripts for setup and guarded experiment jobs.
 - `tests/test_pde_profile.py`: CPU-only tests for layout generation, scratch-path validation, Slurm rendering, and 70B guard behavior.
 - `README.md`, `WORKFLOW.md`, `CLAUDE.md`: keep operational instructions focused on the two-GPU PDE Slurm profile.
 
@@ -30,4 +30,4 @@ The repo test command remains:
 conda run -n cascade python -m pytest tests/
 ```
 
-On PDE, that command should run inside a Slurm job from `/local/scratch2/lding43`.
+On PDE, that command should run through VS Code Remote SSH from the scratch checkout under `/local/scratch2/lding43`.

@@ -8,7 +8,8 @@ The project measures whether a TA2-style activation steering intervention applie
 
 ## PDE Constraints
 
-- Execute through Slurm on the Emory Math PDE cluster.
+- Execute setup and GPU jobs through Slurm on the Emory Math PDE cluster.
+- Run CPU tests through VS Code Remote SSH from the scratch checkout.
 - Keep the repository, environment, model caches, data, results, and temporary files under `/local/scratch2/lding43`.
 - Use the `cascade` Conda environment.
 - PDE GPUs are Blackwell (`sm_120`); setup must use CUDA 12.8+ compatible PyTorch/vLLM wheels. Do not use the old CUDA 12.1 PyTorch stack.
@@ -60,23 +61,16 @@ The setup chain:
 - generates TA2-derived contrastive pairs
 - runs setup verification inside the Slurm job
 
-## 3. Submit The Test Job
+## 3. Run Tests Through VS Code Remote SSH
+
+Connect VS Code to the scratch checkout with Remote SSH, select the scratch-local `cascade` interpreter, and run the suite from the VS Code terminal or Test Explorer:
 
 ```bash
-python3 scripts/build_pde_sbatch.py pytest \
-  --netid lding43 \
-  --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades > pde-pytest.sbatch
-
-sbatch pde-pytest.sbatch
+cd /local/scratch2/lding43/MAS-Activation-Cascades
+conda run -n cascade python -m pytest tests/
 ```
 
-Monitor with:
-
-```bash
-squeue -u lding43
-tail -f slurm-<jobid>.out
-sacct -j <jobid> --format=JobID,JobName,State,ExitCode,Elapsed,AllocTRES
-```
+Keep pytest caches and temporary files in scratch. Do not run tests from `/home/lding43`.
 
 ## 4. Prepare Steering Inputs
 
@@ -131,7 +125,25 @@ python3 scripts/build_pde_sbatch.py serve-clean \
 sbatch pde-vllm-70b.sbatch
 ```
 
-The PDE profile rejects 70B-class concurrent cascade jobs because the two-GPU allocation cannot host separate clean and steered 70B model copies at the same time.
+The PDE profile rejects *unquantized* 70B-class cascade jobs because the two-GPU allocation cannot host separate clean and steered BF16 70B copies at once. A *quantized* 70B (~38 GB AWQ-INT4) fits one 96 GB GPU, so the quantized 70B cascade below is supported.
+
+## 6b. 70B Quantized Cascade Sweep
+
+Runs the full cascade with both the clean server (GPU 0) and the steered worker (GPU 1) as a single-GPU quantized 70B, in one self-hosted, resumable Slurm job. Compute the 70B steering vector first (a 1-GPU `compute-vector` job on the quantized model), then:
+
+```bash
+python3 scripts/build_pde_sbatch.py cascade \
+  --netid lding43 \
+  --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
+  --model hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4 \
+  --quantization awq_marlin \
+  --steering-vector steering_vectors/harmfulness_llama3_70b.pt \
+  --experiments 1.2,1.3,1.4 --steering-strengths 0.5,1.0,1.5 \
+  --task-indices 0,1,2,3,4 --resume > pde-cascade-70b.sbatch
+sbatch pde-cascade-70b.sbatch
+```
+
+The job backgrounds the clean vLLM server on GPU 0, health-checks it, then runs the steered sweep on GPU 1 against `http://127.0.0.1:8000/v1`. Resubmit the same script to resume; finished cells are skipped via a `.cell_complete` sentinel.
 
 If vLLM fails with `NVIDIA RTX PRO 6000 Blackwell ... sm_120 is not compatible with the current PyTorch installation` or `NCCL error: unhandled cuda error`, the environment is using an incompatible CUDA/PyTorch stack. Re-run setup from the current branch so `--cuda128` is used; do not switch back to `torch==2.5.1`, CUDA 12.1, or `vllm==0.6.4`.
 

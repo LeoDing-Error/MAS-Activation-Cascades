@@ -17,6 +17,17 @@ from src.experiments.phase1_config import PRIMARY_MODEL, parse_csv_list, parse_i
 from src.experiments.sweep import SweepConfig, SweepJob, build_sweep_jobs
 
 PDE_SCRATCH_ROOT = Path("/local/scratch2")
+COMPLETION_SENTINEL = ".cell_complete"
+
+
+def cell_is_complete(results_dir: str) -> bool:
+    return (Path(results_dir) / COMPLETION_SENTINEL).exists()
+
+
+def mark_cell_complete(results_dir: str) -> None:
+    path = Path(results_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    (path / COMPLETION_SENTINEL).write_text("ok", encoding="utf-8")
 
 
 @dataclass(frozen=True)
@@ -44,6 +55,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--max-new-tokens", type=int, default=256)
     parser.add_argument("--chat-turn-limit", type=int, default=2)
+    parser.add_argument("--resume", action="store_true", help="Skip cells whose completion sentinel exists")
     return parser
 
 
@@ -117,12 +129,16 @@ def require_pde_slurm_environment() -> None:
         raise ValueError("Phase 1 sweeps must run inside a PDE Slurm job.")
 
 
-def _run_lane(lane: SweepLane, jobs: Sequence[SweepJob]) -> None:
+def _run_lane(lane: SweepLane, jobs: Sequence[SweepJob], *, resume: bool = False) -> None:
     for job in jobs:
+        if resume and cell_is_complete(job.results_dir):
+            print(f"[lane {lane.lane_id}] skip (complete): {job.results_dir}")
+            continue
         command, env = build_command(job, lane)
         command_text = " ".join(command)
         print(f"[lane {lane.lane_id}] {command_text}")
         subprocess.run(command, check=True, cwd=ROOT, env=env)
+        mark_cell_complete(job.results_dir)
 
 
 def main() -> None:
@@ -161,7 +177,7 @@ def main() -> None:
 
     with ThreadPoolExecutor(max_workers=len(lanes)) as executor:
         futures = [
-            executor.submit(_run_lane, lane, lane_jobs)
+            executor.submit(_run_lane, lane, lane_jobs, resume=args.resume)
             for lane, lane_jobs in zip(lanes, sharded_jobs)
             if lane_jobs
         ]

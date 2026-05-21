@@ -1,6 +1,6 @@
 # PDE GPU Test Runbook
 
-This runbook explains how to connect to the Emory Math PDE cluster, put the repo and environment in scratch, and run the full project test suite through Slurm.
+This runbook explains how to connect to the Emory Math PDE cluster, put the repo and environment in scratch, and run the full project test suite through VS Code Remote SSH.
 
 Commands below are filled in for Emory NetID `lding43`.
 
@@ -148,70 +148,28 @@ Important constraints:
 - `vllm` belongs in PDE Slurm jobs for this branch.
 - PDE GPUs are Blackwell (`sm_120`). The environment must use CUDA 12.8+ compatible PyTorch/vLLM wheels. Do not use the old `torch==2.5.1` / CUDA 12.1 / `vllm==0.6.4` stack.
 
-## 6. Generate A Slurm Test Job
+## 6. Run Tests Through VS Code Remote SSH
 
-The project test suite is CPU-only, but PDE policy still requires jobs to run through Slurm rather than as computation on the login node.
+The project test suite is CPU-only. Run it from the scratch checkout in a VS Code Remote SSH session, not from `/home/lding43`.
 
-Generate the test job:
+In VS Code, open `/local/scratch2/lding43/MAS-Activation-Cascades` through Remote SSH and select the scratch-local `cascade` interpreter:
+
+```bash
+/local/scratch2/lding43/.conda/envs/cascade/bin/python
+```
+
+Run the full suite from the VS Code terminal:
 
 ```bash
 cd /local/scratch2/lding43/MAS-Activation-Cascades
-python3 scripts/build_pde_sbatch.py pytest \
-  --netid lding43 \
-  --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades > pde-pytest.sbatch
+conda run -n cascade python -m pytest tests/
 ```
 
-Inspect it before submitting:
+You can also use the VS Code Test Explorer after enabling pytest discovery for `tests/`.
+
+Before running tests, keep runtime paths under scratch in the Remote SSH terminal:
 
 ```bash
-sed -n '1,120p' pde-pytest.sbatch
-```
-
-It should:
-
-- `cd` into `/local/scratch2/lding43/MAS-Activation-Cascades`
-- export Conda, pip, Hugging Face, and temp paths under scratch
-- run `conda run -n cascade python -m pytest tests/`
-- not request a GPU for CPU-only tests
-
-Submit it:
-
-```bash
-sbatch pde-pytest.sbatch
-```
-
-## 7. Watch The Test Job
-
-Check queued or running jobs:
-
-```bash
-squeue -u lding43
-```
-
-After submission, Slurm normally writes output to a file such as `slurm-<jobid>.out` in the submission directory.
-
-Follow the output:
-
-```bash
-tail -f slurm-<jobid>.out
-```
-
-Check completed job status:
-
-```bash
-sacct -j <jobid> --format=JobID,JobName,State,ExitCode,Elapsed,AllocTRES
-```
-
-A passing full test run should end with pytest reporting all tests passed.
-
-## 8. Run One Test File
-
-For a faster check, either submit the generated full-test job or run a short interactive Slurm allocation if PDE policy allows it.
-
-Inside an allocated job shell:
-
-```bash
-cd /local/scratch2/lding43/MAS-Activation-Cascades
 export CONDA_ENVS_PATH=/local/scratch2/lding43/.conda/envs
 export CONDA_PKGS_DIRS=/local/scratch2/lding43/.conda/pkgs
 export XDG_CACHE_HOME=/local/scratch2/lding43/.cache
@@ -219,12 +177,20 @@ export HF_HOME=/local/scratch2/lding43/.cache/huggingface
 export TRANSFORMERS_CACHE=/local/scratch2/lding43/.cache/huggingface/transformers
 export PIP_CACHE_DIR=/local/scratch2/lding43/.cache/pip
 export TMPDIR=/local/scratch2/lding43/tmp
-conda run -n cascade python -m pytest tests/test_pde_profile.py -q
 ```
 
-If interactive jobs are not enabled on PDE, create a copy of `pde-pytest.sbatch` and replace the final command with:
+## 7. Watch Test Results
+
+For terminal runs, pytest prints progress and failures directly in the VS Code terminal. For VS Code Test Explorer runs, use the test output panel and the Python extension output when discovery fails.
+
+A passing full test run should end with pytest reporting all tests passed.
+
+## 8. Run One Test File
+
+For a faster check from VS Code Remote SSH:
 
 ```bash
+cd /local/scratch2/lding43/MAS-Activation-Cascades
 conda run -n cascade python -m pytest tests/test_pde_profile.py -q
 ```
 
@@ -277,11 +243,41 @@ python3 scripts/build_pde_sbatch.py serve-clean \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
   --model hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4 \
-  --quantization awq > pde-vllm-70b.sbatch
+  --quantization awq_marlin > pde-vllm-70b.sbatch
 sbatch pde-vllm-70b.sbatch
 ```
 
 Approximate scratch budget with AWQ: conda env ~20 GB + 8B BF16 ~16 GB + 70B AWQ INT4 ~38 GB + caches/results ~10 GB = ~84 GB.
+
+## 10b. 70B Quantized Cascade Sweep
+
+To run the full cascade with a quantized 70B on both GPUs in one job (clean server on GPU 0, steered worker on GPU 1), first compute the 70B steering vector on the quantized model:
+
+```bash
+python3 scripts/build_pde_sbatch.py compute-vector \
+  --netid lding43 \
+  --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
+  --model hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4 \
+  --output steering_vectors/harmfulness_llama3_70b.pt \
+  --gpu-set 0 > pde-vector-70b.sbatch
+sbatch pde-vector-70b.sbatch
+```
+
+Then render and submit the self-hosted, resumable cascade job:
+
+```bash
+python3 scripts/build_pde_sbatch.py cascade \
+  --netid lding43 \
+  --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
+  --model hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4 \
+  --quantization awq_marlin \
+  --steering-vector steering_vectors/harmfulness_llama3_70b.pt \
+  --experiments 1.2,1.3,1.4 --steering-strengths 0.5,1.0,1.5 \
+  --task-indices 0,1,2,3,4 --resume > pde-cascade-70b.sbatch
+sbatch pde-cascade-70b.sbatch
+```
+
+It requests two GPUs, backgrounds the clean vLLM server on GPU 0 with `--tensor-parallel-size 1`, health-checks `http://127.0.0.1:8000/health`, then runs the steered sweep on GPU 1 against `http://127.0.0.1:8000/v1`. Resubmit the same script to resume — finished cells are skipped via a `.cell_complete` sentinel.
 
 ## 11. Common Failures
 

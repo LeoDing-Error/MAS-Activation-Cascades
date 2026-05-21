@@ -8,7 +8,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Type,
 import torch
 from openai import AsyncStream, Stream
 from pydantic import BaseModel
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 from src.project_paths import ensure_local_camel_on_path
 
@@ -189,6 +189,27 @@ def _resolve_device(device: str) -> str:
     return "cpu"
 
 
+def _build_model_kwargs(
+    *,
+    resolved_device: str,
+    torch_dtype: torch.dtype,
+    is_quantized: bool,
+    trust_remote_code: bool,
+) -> Dict[str, Any]:
+    kwargs: Dict[str, Any] = {"trust_remote_code": trust_remote_code}
+    if resolved_device == "cuda":
+        kwargs["device_map"] = "auto"
+        if not is_quantized:
+            kwargs["torch_dtype"] = torch_dtype
+    else:
+        if is_quantized:
+            raise RuntimeError(
+                "Quantized steered models require CUDA; CPU load is unsupported."
+            )
+        kwargs["torch_dtype"] = torch.float32
+    return kwargs
+
+
 class SteeringModelBackend(BaseModelBackend):
     def __init__(
         self,
@@ -224,12 +245,14 @@ class SteeringModelBackend(BaseModelBackend):
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        model_kwargs: Dict[str, Any] = {"trust_remote_code": trust_remote_code}
-        if self.resolved_device == "cuda":
-            model_kwargs["device_map"] = "auto"
-            model_kwargs["torch_dtype"] = self.torch_dtype
-        else:
-            model_kwargs["torch_dtype"] = torch.float32
+        hf_config = AutoConfig.from_pretrained(model_name, trust_remote_code=trust_remote_code)
+        is_quantized = getattr(hf_config, "quantization_config", None) is not None
+        model_kwargs = _build_model_kwargs(
+            resolved_device=self.resolved_device,
+            torch_dtype=self.torch_dtype,
+            is_quantized=is_quantized,
+            trust_remote_code=trust_remote_code,
+        )
         self.model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
         if self.resolved_device != "cuda":
             self.model = self.model.to(self.resolved_device)

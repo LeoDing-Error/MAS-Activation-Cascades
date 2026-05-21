@@ -2,14 +2,15 @@
 
 Experimental testbed for studying whether TA2-style activation steering effects propagate through CAMEL-based multi-agent systems.
 
-This branch is scoped to the Emory Math PDE GPU run. Operational details live in `WORKFLOW.md`; the cluster test/run steps live in `docs/PDE_GPU_TEST_RUNBOOK.md`.
+This branch is scoped to the Emory Math PDE GPU run. Operational details live in `WORKFLOW.md`; the Remote SSH test flow and cluster run steps live in `docs/PDE_GPU_TEST_RUNBOOK.md`.
 
 ## PDE Cluster Target
 
 The current PDE allocation provides:
 
 - 2 total Blackwell GPUs with 96 GB each
-- Slurm-only execution
+- Slurm execution for setup and GPU jobs
+- VS Code Remote SSH testing from the scratch checkout
 - 100 GB scratch under `/local/scratch2/lding43`
 
 Do not run environments, model downloads, caches, results, or temporary files from `/home/lding43`.
@@ -56,16 +57,18 @@ python3 scripts/build_pde_sbatch.py setup \
 sbatch pde-setup.sbatch
 ```
 
-## PDE Slurm Jobs
+## Running Tests
 
-Generate a CPU-only test job:
+Run CPU-only tests through VS Code Remote SSH from the scratch checkout:
 
 ```bash
-python3 scripts/build_pde_sbatch.py pytest \
-  --netid lding43 \
-  --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades > pde-pytest.sbatch
-sbatch pde-pytest.sbatch
+cd /local/scratch2/lding43/MAS-Activation-Cascades
+conda run -n cascade python -m pytest tests/
 ```
+
+Use the VS Code Test Explorer with the same scratch-local `cascade` interpreter.
+
+## PDE Slurm Jobs
 
 Generate the 8B steering-vector job:
 
@@ -99,11 +102,11 @@ python3 scripts/build_pde_sbatch.py serve-clean \
 sbatch pde-vllm-70b.sbatch
 ```
 
-The PDE profile rejects 70B-class concurrent cascade launches. With two GPUs total, use tensor parallel for one 70B model at a time.
+The PDE profile rejects *unquantized* 70B-class concurrent cascade launches. For a true 70B cascade on two GPUs, use a quantized model with the self-hosted `build_pde_sbatch.py cascade` command (clean server on GPU 0, steered worker on GPU 1) — see WORKFLOW.md section 6b.
 
 ## Core Scripts
 
-- `scripts/build_pde_sbatch.py`: renders Slurm scripts for PDE tests, sweeps, and tensor-parallel serving
+- `scripts/build_pde_sbatch.py`: renders Slurm scripts for PDE setup, sweeps, vectors, and tensor-parallel serving
 - `scripts/setup_stack.sh`: creates the `cascade` environment, installs pinned local dependencies, and verifies setup
 - `scripts/build_ta2_pairs.py`: builds TA2-derived contrastive pairs from the pinned reference checkout
 - `scripts/compute_vector_pde.sh`: computes the steering vector from a PDE GPU allocation or job script

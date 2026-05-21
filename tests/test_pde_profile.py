@@ -57,6 +57,24 @@ class PdeProfileTests(unittest.TestCase):
                 mode="cascade",
             )
 
+    def test_cascade_layout_allows_quantized_70b_on_per_gpu_layout(self) -> None:
+        layout = build_pde_layout(
+            model_name="meta-llama/Llama-3.1-70B-Instruct",
+            mode="cascade",
+            quantization="awq_marlin",
+        )
+
+        self.assertEqual(layout.clean_server_gpu_set, "0")
+        self.assertEqual(layout.worker_gpu_sets, ("1",))
+        self.assertEqual(layout.tensor_parallel_size, 1)
+
+    def test_cascade_layout_still_rejects_unquantized_70b(self) -> None:
+        with self.assertRaisesRegex(ValueError, "quantiz"):
+            build_pde_layout(
+                model_name="meta-llama/Llama-3.1-70B-Instruct",
+                mode="cascade",
+            )
+
     def test_tensor_parallel_layout_uses_both_gpus(self) -> None:
         layout = build_pde_layout(
             model_name="meta-llama/Llama-3.1-70B-Instruct",
@@ -261,8 +279,19 @@ class PdeProfileTests(unittest.TestCase):
         self.assertIn("files.watcherExclude", runbook)
         self.assertIn("python3 scripts/build_pde_sbatch.py setup", runbook)
         self.assertIn("sbatch pde-setup.sbatch", runbook)
-        self.assertIn("python3 scripts/build_pde_sbatch.py pytest", runbook)
-        self.assertIn("sbatch pde-pytest.sbatch", runbook)
+        self.assertIn("VS Code Test Explorer", runbook)
+        self.assertIn("python -m pytest tests/", runbook)
+        self.assertNotIn("pde-pytest.sbatch", runbook)
+
+    def test_docs_route_tests_through_vscode_remote_ssh(self) -> None:
+        for relative_path in ("AGENTS.md", "CLAUDE.md", "README.md", "WORKFLOW.md", "PLAN.md"):
+            with self.subTest(path=relative_path):
+                document = (ROOT / relative_path).read_text(encoding="utf-8")
+
+                self.assertIn("VS Code Remote SSH", document)
+                self.assertIn("conda run -n cascade python -m pytest tests/", document)
+                self.assertNotIn("python3 scripts/build_pde_sbatch.py pytest", document)
+                self.assertNotIn("pde-pytest.sbatch", document)
 
     def test_runbook_matches_generated_scratch_runtime_paths(self) -> None:
         runbook = (ROOT / "docs" / "PDE_GPU_TEST_RUNBOOK.md").read_text(encoding="utf-8")
@@ -314,13 +343,13 @@ class PdeProfileTests(unittest.TestCase):
 
         self.assertIn('vllm>=0.9.0,<1; platform_system == "Linux"', requirements)
         self.assertIn("numpy>=2,<2.3", requirements)
-        self.assertIn("torch==2.7.0", setup_env)
-        self.assertIn("torchvision==0.22.0", setup_env)
-        self.assertIn("torchaudio==2.7.0", setup_env)
-        self.assertIn("VLLM_CUDA128_VERSION", setup_env)
-        self.assertIn("+cu128-cp38-abi3-manylinux_2_31_x86_64.whl", setup_env)
+        self.assertIn("torch==2.11.0", setup_env)
+        self.assertIn("torchvision==0.26.0", setup_env)
+        self.assertIn("torchaudio==2.11.0", setup_env)
+        self.assertIn("VLLM_CUDA129_VERSION", setup_env)
+        self.assertIn("%2Bcu129-cp38-abi3-manylinux_2_31_x86_64.whl", setup_env)
         self.assertIn("uninstall -y vllm xformers outlines torch torchvision torchaudio", setup_env)
-        self.assertIn("https://download.pytorch.org/whl/cu128", setup_env)
+        self.assertIn("https://download.pytorch.org/whl/cu129", setup_env)
         self.assertNotIn("torch==2.5.1", setup_env)
         self.assertNotIn("https://download.pytorch.org/whl/cu121", setup_env)
         self.assertIn('"numpy>=2,<2.3"', setup_env)
@@ -342,11 +371,26 @@ class PdeProfileTests(unittest.TestCase):
                 "--model",
                 "hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4",
                 "--quantization",
-                "awq",
+                "awq_marlin",
             ]
         )
 
-        self.assertIn("--quantization awq hugging-quants/", script)
+        self.assertIn("--quantization awq_marlin hugging-quants/", script)
+
+    def test_docs_document_quantized_70b_cascade_command(self) -> None:
+        for relative_path in ("CLAUDE.md", "WORKFLOW.md", "docs/PDE_GPU_TEST_RUNBOOK.md"):
+            with self.subTest(path=relative_path):
+                document = (ROOT / relative_path).read_text(encoding="utf-8")
+                self.assertIn("build_pde_sbatch.py cascade", document)
+                self.assertIn("--steering-vector steering_vectors/harmfulness_llama3_70b.pt", document)
+
+    def test_storage_constrained_awq_docs_use_marlin_quantization(self) -> None:
+        for relative_path in ("AGENTS.md", "CLAUDE.md", "PLAN.md", "docs/PDE_GPU_TEST_RUNBOOK.md"):
+            with self.subTest(path=relative_path):
+                document = (ROOT / relative_path).read_text(encoding="utf-8")
+
+                self.assertIn("--quantization awq_marlin", document)
+                self.assertNotIn("--quantization awq > pde-vllm-70b.sbatch", document)
 
     def test_serve_clean_cli_omits_quantization_flag_by_default(self) -> None:
         script = build_pde_sbatch.render_from_args(
@@ -368,6 +412,38 @@ class PdeProfileTests(unittest.TestCase):
 
         self.assertIn("--quantization)", serve_script)
         self.assertIn('VLLM_ARGS+=(--quantization "$QUANTIZATION")', serve_script)
+
+    def test_cascade_cli_renders_self_hosted_two_gpu_job(self) -> None:
+        script = build_pde_sbatch.render_from_args(
+            [
+                "cascade",
+                "--netid", "lding",
+                "--repo-dir", "/local/scratch2/lding/MAS-Activation-Cascades",
+                "--model", "hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4",
+                "--quantization", "awq_marlin",
+                "--steering-vector", "steering_vectors/harmfulness_llama3_70b.pt",
+            ]
+        )
+
+        self.assertIn("#SBATCH --gres=gpu:2", script)
+        self.assertIn("bash ./scripts/run_cascade_2gpu.sh", script)
+        self.assertIn("--quantization awq_marlin", script)
+        self.assertIn("--steering-vector steering_vectors/harmfulness_llama3_70b.pt", script)
+        self.assertIn("--clean-gpu 0", script)
+        self.assertIn("--worker-gpu 1", script)
+        self.assertNotIn("--clean-api-base", script)
+
+    def test_cascade_cli_rejects_70b_without_quantization(self) -> None:
+        with self.assertRaisesRegex(ValueError, "quantiz"):
+            build_pde_sbatch.render_from_args(
+                [
+                    "cascade",
+                    "--netid", "lding",
+                    "--repo-dir", "/local/scratch2/lding/MAS-Activation-Cascades",
+                    "--model", "meta-llama/Llama-3.1-70B-Instruct",
+                    "--steering-vector", "steering_vectors/harmfulness_llama3_70b.pt",
+                ]
+            )
 
 
 if __name__ == "__main__":

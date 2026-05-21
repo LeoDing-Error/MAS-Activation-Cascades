@@ -131,14 +131,14 @@ python3 scripts/build_pde_sbatch.py setup \
 sbatch pde-setup.sbatch
 ```
 
-### Test Job
+### Tests
 
 ```bash
-python3 scripts/build_pde_sbatch.py pytest \
-  --netid lding43 \
-  --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades > pde-pytest.sbatch
-sbatch pde-pytest.sbatch
+cd /local/scratch2/lding43/MAS-Activation-Cascades
+conda run -n cascade python -m pytest tests/
 ```
+
+Run CPU-only tests through VS Code Remote SSH from the scratch checkout.
 
 ### Build Contrastive Pairs
 
@@ -188,7 +188,7 @@ python3 scripts/build_pde_sbatch.py serve-clean \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
   --model hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4 \
-  --quantization awq > pde-vllm-70b.sbatch
+  --quantization awq_marlin > pde-vllm-70b.sbatch
 sbatch pde-vllm-70b.sbatch
 ```
 

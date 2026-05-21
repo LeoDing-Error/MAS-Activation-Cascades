@@ -47,7 +47,7 @@ Launch sequence inside the job:
 
 4. **70B steering vector** — the existing artifact is 8B (`steering_vectors/harmfulness_llama3_8b.pt`, hidden 4096 / ~32 layers). 70B is hidden 8192 / 80 layers, so compute a fresh vector on the **quantized** 70B via a 1-GPU `compute-vector` job → `steering_vectors/harmfulness_llama3_70b.pt`. Verify the selected layer index is `< 80` and `hidden_size == 8192`.
 
-5. **Resumable per-cell checkpointing** — `scripts/run_phase1_sweep.py` and `experiments/run_phase1.py`. Treat the final-written artifact (`*_summary.json`) as the per-cell completion marker; skip cells already complete. Write-then-rename so a crash mid-cell re-runs that cell cleanly. Add a `--resume` flag.
+5. **Resumable per-cell checkpointing** — `scripts/run_phase1_sweep.py`. After a cell's `run_phase1` subprocess exits successfully (`check=True`), write a `.cell_complete` sentinel into that cell's `results_dir`; `--resume` skips any cell whose sentinel exists. Because the sentinel is written only on a clean child exit and lanes write to disjoint `results_dir` paths, a crashed, killed, or preempted cell lacks the sentinel and re-runs (conservative: redo rather than risk skipping an incomplete cell).
 
 6. **Environment / dependency** — add the AWQ kernel package **without** disturbing the pinned `torch==2.11` / cu129 / vLLM stack (CLAUDE.md invariant). Highest-risk item; validated first (see Validation).
 
@@ -70,7 +70,7 @@ Gate:
 - Clean-server health poll with timeout; fail the job rather than run the sweep against a dead endpoint.
 - `sm_120` kernel / NCCL error retains its existing "incompatible stack" meaning and additionally signals "AWQ kernels unavailable → switch to FP8."
 - `trap … EXIT` tears down the backgrounded clean server.
-- Resume idempotency via final-artifact completion marker + write-then-rename.
+- Resume idempotency via a `.cell_complete` sentinel written only after a cell's child process exits cleanly (incomplete cells lack it and re-run).
 
 ## Testing
 

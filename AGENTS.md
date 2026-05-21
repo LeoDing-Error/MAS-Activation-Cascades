@@ -20,18 +20,16 @@ python3 scripts/build_pde_sbatch.py setup \
 sbatch pde-setup.sbatch
 ```
 
-Submit the Slurm test job below after setup.
-
 ## Running tests
 
+Run tests from the scratch checkout through VS Code Remote SSH. Use the Remote SSH terminal or Test Explorer after selecting the scratch-local `cascade` interpreter.
+
 ```bash
-python3 scripts/build_pde_sbatch.py pytest \
-  --netid lding43 \
-  --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades > pde-pytest.sbatch
-sbatch pde-pytest.sbatch
+cd /local/scratch2/lding43/MAS-Activation-Cascades
+conda run -n cascade python -m pytest tests/
 ```
 
-All tests are CPU-only, but this branch still runs them through PDE Slurm.
+All tests are CPU-only. Do not run them from `/home/lding43`; keep the VS Code server, repository, environment, caches, and pytest temp files under `/local/scratch2/lding43`.
 
 ## 70B GPU Serving
 
@@ -52,11 +50,13 @@ python3 scripts/build_pde_sbatch.py serve-clean \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
   --model hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4 \
-  --quantization awq > pde-vllm-70b.sbatch
+  --quantization awq_marlin > pde-vllm-70b.sbatch
 sbatch pde-vllm-70b.sbatch
 ```
 
 Scratch budget with AWQ: conda env ~20 GB + 8B BF16 ~16 GB + 70B AWQ INT4 ~38 GB + caches/results ~10 GB ≈ 84 GB.
+
+For a true 70B cascade (clean + steered, both quantized, one per GPU) in a single self-hosted resumable job, use `build_pde_sbatch.py cascade` — see WORKFLOW.md section 6b. Unquantized 70B cascade is rejected.
 
 ## Critical invariants
 
@@ -66,7 +66,7 @@ Scratch budget with AWQ: conda env ~20 GB + 8B BF16 ~16 GB + 70B AWQ INT4 ~38 GB
 
 3. **Experiments 1.2–1.4 require a running vLLM server.** The `--clean-api-base` guard in `experiments/run_phase1.py` exists to prevent accidental multi-copy local model loading (OOM). Do not remove or bypass it.
 
-4. **PDE runs go through Slurm.** Do not run experiments, setup verification, model downloads, results, caches, or temporary files from `/home/lding43`.
+4. **PDE GPU/setup runs go through Slurm; tests run through VS Code Remote SSH.** Do not run experiments, setup verification, model downloads, results, caches, or temporary files from `/home/lding43`.
 
 5. **Steering artifacts use `torch.load(..., weights_only=True)`.** Do not change this to the unsafe load path.
 

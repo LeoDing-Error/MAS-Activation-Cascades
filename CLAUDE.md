@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working with this repository.
 
 ## Scope
 
-This branch is scoped to the Emory Math PDE GPU workflow. Keep setup, testing, and experiment instructions focused on Slurm jobs under `/local/scratch2/lding43`.
+This branch is scoped to the Emory Math PDE GPU workflow. Keep setup and experiment instructions focused on Slurm jobs under `/local/scratch2/lding43`; run CPU tests from the scratch checkout through VS Code Remote SSH.
 
 ## Environment
 
@@ -31,16 +31,14 @@ sbatch pde-setup.sbatch
 
 ## Running Tests
 
-Render and submit the PDE Slurm test job:
+Run tests from a VS Code Remote SSH session connected to the scratch checkout. Use the Remote SSH terminal or Test Explorer with the scratch-local `cascade` interpreter.
 
 ```bash
-python3 scripts/build_pde_sbatch.py pytest \
-  --netid lding43 \
-  --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades > pde-pytest.sbatch
-sbatch pde-pytest.sbatch
+cd /local/scratch2/lding43/MAS-Activation-Cascades
+conda run -n cascade python -m pytest tests/
 ```
 
-The test suite is CPU-only, but PDE computation still goes through Slurm.
+The test suite is CPU-only. Keep the VS Code server, repository, environment, caches, and pytest temp files under `/local/scratch2/lding43`; do not run tests from `/home/lding43`.
 
 ## PDE GPU Runs
 
@@ -83,7 +81,7 @@ python3 scripts/build_pde_sbatch.py serve-clean \
 sbatch pde-vllm-70b.sbatch
 ```
 
-The PDE helper rejects 70B-class concurrent cascade sweeps because clean 70B plus steered 70B co-residency does not fit the two-GPU allocation.
+The PDE helper rejects *unquantized* 70B-class cascade sweeps because clean 70B plus steered 70B BF16 co-residency does not fit the two-GPU allocation. A *quantized* 70B fits one GPU, so quantized 70B cascade is supported (see below).
 
 **Storage-constrained alternative (~100 GB scratch):** Download ~38 GB instead of ~140 GB BF16:
 
@@ -92,9 +90,28 @@ python3 scripts/build_pde_sbatch.py serve-clean \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
   --model hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4 \
-  --quantization awq > pde-vllm-70b.sbatch
+  --quantization awq_marlin > pde-vllm-70b.sbatch
 sbatch pde-vllm-70b.sbatch
 ```
+
+### 70B Quantized Cascade Sweep (one 2-GPU job)
+
+Runs a true 70B cascade — clean server on GPU 0, steered worker on GPU 1, both a
+single-GPU quantized 70B — in one self-hosted, resumable job:
+
+```bash
+python3 scripts/build_pde_sbatch.py cascade \
+  --netid lding43 \
+  --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
+  --model hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4 \
+  --quantization awq_marlin \
+  --steering-vector steering_vectors/harmfulness_llama3_70b.pt \
+  --experiments 1.2,1.3,1.4 --steering-strengths 0.5,1.0,1.5 \
+  --resume > pde-cascade-70b.sbatch
+sbatch pde-cascade-70b.sbatch
+```
+
+Resubmit the same script to resume; completed cells are skipped via a `.cell_complete` sentinel. Unquantized 70B cascade is rejected — pass `--quantization` so each model fits one 96 GB GPU. The 70B steering vector must be computed first with `compute-vector` on the quantized model.
 
 ## Architecture
 
@@ -113,7 +130,7 @@ TA2 harmful.csv
 ### Key Modules
 
 - `src/cluster/pde_profile.py`: PDE scratch validation, two-GPU layout selection, and Slurm rendering.
-- `scripts/build_pde_sbatch.py`: CLI for rendering PDE test, sweep, and serving job scripts.
+- `scripts/build_pde_sbatch.py`: CLI for rendering PDE setup, sweep, vector, and serving job scripts.
 - `src/steering/compute_vectors.py`: TA2-style vector computation and layer selection.
 - `src/backends/steering_backend.py`: Hugging Face model backend with optional steering hook.
 - `src/backends/camel_integration.py`: CAMEL agent adapters, including OpenAI-compatible clean-agent clients.

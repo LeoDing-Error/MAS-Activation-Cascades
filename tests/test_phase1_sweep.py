@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -172,6 +173,44 @@ class Phase1SweepMultiGpuTests(unittest.TestCase):
         self.assertEqual(command[command.index("--clean-api-base") + 1], "http://127.0.0.1:8001/v1")
         self.assertIn("--task-indices", command)
         self.assertEqual(command[command.index("--task-indices") + 1], "0,2")
+
+
+class Phase1ResumeTests(unittest.TestCase):
+    def _job(self, results_dir: str):
+        return run_phase1_sweep.SweepJob(
+            experiment="1.2",
+            model="m",
+            steering_vector="s.pt",
+            steering_strength=1.0,
+            task_names=None,
+            task_indices=None,
+            repeat_index=0,
+            results_dir=results_dir,
+            max_new_tokens=8,
+            chat_turn_limit=1,
+        )
+
+    def test_cell_is_complete_detects_sentinel(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertFalse(run_phase1_sweep.cell_is_complete(tmp))
+            run_phase1_sweep.mark_cell_complete(tmp)
+            self.assertTrue(run_phase1_sweep.cell_is_complete(tmp))
+
+    def test_run_lane_skips_completed_cell_when_resuming(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_phase1_sweep.mark_cell_complete(tmp)
+            lane = run_phase1_sweep.SweepLane(lane_id=0, clean_api_base="http://x/v1", worker_gpu_set="1")
+            with patch.object(run_phase1_sweep.subprocess, "run") as mock_run:
+                run_phase1_sweep._run_lane(lane, [self._job(tmp)], resume=True)
+            mock_run.assert_not_called()
+
+    def test_run_lane_runs_and_marks_incomplete_cell(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            lane = run_phase1_sweep.SweepLane(lane_id=0, clean_api_base="http://x/v1", worker_gpu_set="1")
+            with patch.object(run_phase1_sweep.subprocess, "run") as mock_run:
+                run_phase1_sweep._run_lane(lane, [self._job(tmp)], resume=True)
+            mock_run.assert_called_once()
+            self.assertTrue(run_phase1_sweep.cell_is_complete(tmp))
 
 
 if __name__ == "__main__":

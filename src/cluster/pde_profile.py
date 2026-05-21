@@ -39,12 +39,14 @@ def build_pde_layout(
     *,
     model_name: str,
     mode: str,
+    quantization: str | None = None,
 ) -> PdeLayout:
     if mode == "cascade":
-        if is_70b_class_model(model_name):
+        if is_70b_class_model(model_name) and quantization is None:
             raise ValueError(
-                "70B-class cascade runs need both PDE GPUs for one tensor-parallel model. "
-                "Use tensor-parallel mode for 70B-class PDE jobs."
+                "70B-class cascade runs require a single-GPU-resident quantized model. "
+                "Pass --quantization (e.g. awq_marlin) so the clean and steered 70B "
+                "each fit one GPU; use tensor-parallel mode only for serving."
             )
         return PdeLayout(
             mode=mode,
