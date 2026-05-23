@@ -194,6 +194,31 @@ class PdeProfileTests(unittest.TestCase):
         self.assertNotIn("CUDA_VISIBLE_DEVICES=", script)
         self.assertIn("./scripts/compute_vector_pde.sh --env-name cascade", script)
 
+    def test_smoke_steered_quant_cli_renders_one_gpu_job(self) -> None:
+        script = build_pde_sbatch.render_from_args(
+            [
+                "smoke-steered-quant",
+                "--netid",
+                "lding",
+                "--repo-dir",
+                "/local/scratch2/lding/MAS-Activation-Cascades",
+                "--model",
+                "hugging-quants/Meta-Llama-3.1-70B-Instruct-GPTQ-INT4",
+                "--gpu-set",
+                "0",
+            ]
+        )
+
+        self.assertIn("#SBATCH --job-name=cascade-smoke-steered-quant", script)
+        self.assertIn("#SBATCH --gres=gpu:1", script)
+        self.assertIn("CUDA_VISIBLE_DEVICES=0", script)
+        self.assertIn(
+            "conda run -n cascade python scripts/smoke_steered_quant.py "
+            "hugging-quants/Meta-Llama-3.1-70B-Instruct-GPTQ-INT4",
+            script,
+        )
+        self.assertIn("export HF_HOME=/local/scratch2/lding/.cache/huggingface", script)
+
     def test_compute_vector_cli_accepts_explicit_gpu_set(self) -> None:
         script = build_pde_sbatch.render_from_args(
             [

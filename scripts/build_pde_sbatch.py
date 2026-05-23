@@ -50,6 +50,15 @@ def _build_parser() -> argparse.ArgumentParser:
     vector_parser.add_argument("--dtype", default="auto")
     vector_parser.add_argument("--gpu-set", default=None)
 
+    smoke_parser = subparsers.add_parser(
+        "smoke-steered-quant",
+        help="Render a 1-GPU HF Transformers smoke job for a quantized steered model",
+    )
+    _add_common_args(smoke_parser)
+    smoke_parser.add_argument("--job-name", default="cascade-smoke-steered-quant")
+    smoke_parser.add_argument("--model", required=True)
+    smoke_parser.add_argument("--gpu-set", default=None)
+
     sweep_parser = subparsers.add_parser("sweep", help="Render a guarded one-lane PDE cascade sweep job")
     _add_common_args(sweep_parser)
     sweep_parser.add_argument("--job-name", default="cascade-sweep")
@@ -160,6 +169,27 @@ def render_from_args(argv: Sequence[str]) -> str:
             command=command,
             gpu_count=1,
             time_limit="04:00:00",
+            mem="64G",
+            cuda_visible_devices=args.gpu_set,
+        )
+
+    if args.command_name == "smoke-steered-quant":
+        command = [
+            "conda",
+            "run",
+            "-n",
+            args.env_name,
+            "python",
+            "scripts/smoke_steered_quant.py",
+            args.model,
+        ]
+        return render_sbatch_script(
+            job_name=args.job_name,
+            netid=args.netid,
+            repo_dir=args.repo_dir,
+            command=command,
+            gpu_count=1,
+            time_limit="02:00:00",
             mem="64G",
             cuda_visible_devices=args.gpu_set,
         )
