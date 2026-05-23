@@ -2,16 +2,48 @@
 hook under HF Transformers on Blackwell sm_120. Run inside a 1-GPU PDE job."""
 from __future__ import annotations
 
+import importlib.util
 import sys
+from collections.abc import Iterable
 
 import torch
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+
+
+def package_status(package_names: Iterable[str]) -> dict[str, bool]:
+    return {name: importlib.util.find_spec(name) is not None for name in package_names}
+
+
+def cuda_summary() -> str:
+    if not torch.cuda.is_available():
+        return "cuda_available=False"
+    device_index = torch.cuda.current_device()
+    props = torch.cuda.get_device_properties(device_index)
+    major, minor = torch.cuda.get_device_capability(device_index)
+    return (
+        "cuda_available=True "
+        f"device={device_index} "
+        f"name={props.name} "
+        f"capability=sm_{major}{minor}"
+    )
+
+
+def print_runtime_context(model_name: str) -> None:
+    print(f"model: {model_name}")
+    print(f"python: {sys.version.split()[0]}")
+    print(f"torch: {torch.__version__}")
+    print(f"cuda: {cuda_summary()}")
+    for package_name, present in package_status(["gptqmodel", "optimum", "awq", "autoawq", "auto_awq"]).items():
+        state = "present" if present else "missing"
+        print(f"package {package_name}: {state}")
 
 
 def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit("usage: smoke_steered_quant.py <model_name_or_path>")
     model_name = sys.argv[1]
+    print_runtime_context(model_name)
+
+    from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
     config = AutoConfig.from_pretrained(model_name)
     print("quantization_config:", getattr(config, "quantization_config", None))
