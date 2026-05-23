@@ -125,7 +125,7 @@ python3 scripts/build_pde_sbatch.py serve-clean \
 sbatch pde-vllm-70b.sbatch
 ```
 
-The PDE profile rejects *unquantized* 70B-class cascade jobs because the two-GPU allocation cannot host separate clean and steered BF16 70B copies at once. A *quantized* 70B (~38 GB GPTQ INT4 candidate) fits one 96 GB GPU, so the quantized 70B cascade below is supported within the 100 GB scratch limit.
+The PDE profile rejects *unquantized* 70B-class cascade jobs because the two-GPU allocation cannot host separate clean and steered BF16 70B copies at once. A GPTQ INT4 candidate (~38 GB) fits one 96 GB GPU within the 100 GB scratch limit, so the helper can render a quantized 70B cascade pending the GPTQ validation gates below.
 
 ## 6b. 70B Quantized Cascade Sweep
 

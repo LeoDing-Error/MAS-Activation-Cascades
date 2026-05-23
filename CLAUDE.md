@@ -82,9 +82,9 @@ python3 scripts/build_pde_sbatch.py serve-clean \
 sbatch pde-vllm-70b.sbatch
 ```
 
-The PDE helper rejects *unquantized* 70B-class cascade sweeps because clean 70B plus steered 70B BF16 co-residency does not fit the two-GPU allocation. A *quantized* 70B fits one GPU, so quantized 70B cascade is supported (see below).
+The PDE helper rejects *unquantized* 70B-class cascade sweeps because clean 70B plus steered 70B BF16 co-residency does not fit the two-GPU allocation. The helper can render a quantized 70B cascade, pending the GPTQ validation gates below.
 
-**Storage-constrained alternative (~100 GB scratch):** Download ~38 GB instead of ~140 GB BF16:
+**Storage-constrained GPTQ INT4 candidate (~100 GB scratch):** Download ~38 GB instead of ~140 GB BF16:
 
 ```bash
 python3 scripts/build_pde_sbatch.py serve-clean \

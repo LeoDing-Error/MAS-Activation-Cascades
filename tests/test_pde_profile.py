@@ -417,7 +417,13 @@ class PdeProfileTests(unittest.TestCase):
                 self.assertIn("hugging-quants/Meta-Llama-3.1-70B-Instruct-GPTQ-INT4", document)
                 self.assertIn("--quantization gptq_marlin", document)
                 self.assertIn("100 GB", document)
-                self.assertIn("GPTQ", document)
+                self.assertIn("GPTQ INT4 candidate", document)
+                self.assertIn("current validation candidate", document)
+                self.assertIn("HF smoke", document)
+                self.assertIn("vLLM smoke", document)
+                self.assertIn("pilot cascade", document)
+                self.assertNotIn("hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4", document)
+                self.assertNotIn("--quantization awq_marlin", document)
                 self.assertNotIn("--quantization awq > pde-vllm-70b.sbatch", document)
 
     def test_serve_clean_cli_omits_quantization_flag_by_default(self) -> None:
