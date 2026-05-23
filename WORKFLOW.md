@@ -125,18 +125,20 @@ python3 scripts/build_pde_sbatch.py serve-clean \
 sbatch pde-vllm-70b.sbatch
 ```
 
-The PDE profile rejects *unquantized* 70B-class cascade jobs because the two-GPU allocation cannot host separate clean and steered BF16 70B copies at once. A *quantized* 70B (~38 GB AWQ-INT4) fits one 96 GB GPU, so the quantized 70B cascade below is supported.
+The PDE profile rejects *unquantized* 70B-class cascade jobs because the two-GPU allocation cannot host separate clean and steered BF16 70B copies at once. A *quantized* 70B (~38 GB GPTQ INT4 candidate) fits one 96 GB GPU, so the quantized 70B cascade below is supported within the 100 GB scratch limit.
 
 ## 6b. 70B Quantized Cascade Sweep
 
 Runs the full cascade with both the clean server (GPU 0) and the steered worker (GPU 1) as a single-GPU quantized 70B, in one self-hosted, resumable Slurm job. Compute the 70B steering vector first (a 1-GPU `compute-vector` job on the quantized model), then:
 
+This GPTQ path is the current validation candidate until the HF smoke, steering-vector, vLLM smoke, and pilot cascade Slurm gates pass; after those gates pass it becomes the recommended 70B cascade path.
+
 ```bash
 python3 scripts/build_pde_sbatch.py cascade \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
-  --model hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4 \
-  --quantization awq_marlin \
+  --model hugging-quants/Meta-Llama-3.1-70B-Instruct-GPTQ-INT4 \
+  --quantization gptq_marlin \
   --steering-vector steering_vectors/harmfulness_llama3_70b.pt \
   --experiments 1.2,1.3,1.4 --steering-strengths 0.5,1.0,1.5 \
   --task-indices 0,1,2,3,4 --resume > pde-cascade-70b.sbatch

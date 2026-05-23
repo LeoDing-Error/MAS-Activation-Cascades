@@ -409,12 +409,15 @@ class PdeProfileTests(unittest.TestCase):
                 self.assertIn("build_pde_sbatch.py cascade", document)
                 self.assertIn("--steering-vector steering_vectors/harmfulness_llama3_70b.pt", document)
 
-    def test_storage_constrained_awq_docs_use_marlin_quantization(self) -> None:
-        for relative_path in ("AGENTS.md", "CLAUDE.md", "PLAN.md", "docs/PDE_GPU_TEST_RUNBOOK.md"):
+    def test_storage_constrained_docs_name_gptq_as_validation_candidate(self) -> None:
+        for relative_path in ("AGENTS.md", "CLAUDE.md", "PLAN.md", "WORKFLOW.md", "docs/PDE_GPU_TEST_RUNBOOK.md"):
             with self.subTest(path=relative_path):
                 document = (ROOT / relative_path).read_text(encoding="utf-8")
 
-                self.assertIn("--quantization awq_marlin", document)
+                self.assertIn("hugging-quants/Meta-Llama-3.1-70B-Instruct-GPTQ-INT4", document)
+                self.assertIn("--quantization gptq_marlin", document)
+                self.assertIn("100 GB", document)
+                self.assertIn("GPTQ", document)
                 self.assertNotIn("--quantization awq > pde-vllm-70b.sbatch", document)
 
     def test_serve_clean_cli_omits_quantization_flag_by_default(self) -> None:

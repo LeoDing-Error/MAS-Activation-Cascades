@@ -43,20 +43,21 @@ python3 scripts/build_pde_sbatch.py serve-clean \
 sbatch pde-vllm-70b.sbatch
 ```
 
-Storage-constrained alternative (AWQ INT4, ~38 GB on disk — fits ~100 GB scratch):
+Storage-constrained GPTQ INT4 candidate (~38 GB on disk — fits 100 GB scratch, pending PDE smoke validation):
 
 ```bash
 python3 scripts/build_pde_sbatch.py serve-clean \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
-  --model hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4 \
-  --quantization awq_marlin > pde-vllm-70b.sbatch
+  --model hugging-quants/Meta-Llama-3.1-70B-Instruct-GPTQ-INT4 \
+  --quantization gptq_marlin > pde-vllm-70b.sbatch
 sbatch pde-vllm-70b.sbatch
 ```
 
-Scratch budget with AWQ: conda env ~20 GB + 8B BF16 ~16 GB + 70B AWQ INT4 ~38 GB + caches/results ~10 GB ≈ 84 GB.
+Scratch is capped at **100 GB total and cannot be expanded.** Budget every download against this hard limit: BF16 70B (~140 GB) is impossible and FP8 70B (~70 GB) is too tight; only INT4 70B fits comfortably. Scratch budget with GPTQ: conda env ~20 GB + 8B BF16 ~16 GB + 70B GPTQ INT4 ~38 GB + caches/results ~10 GB ≈ 84 GB.
 
 For a true 70B cascade (clean + steered, both quantized, one per GPU) in a single self-hosted resumable job, use `build_pde_sbatch.py cascade` — see WORKFLOW.md section 6b. Unquantized 70B cascade is rejected.
+This GPTQ path is the current validation candidate until the HF smoke, steering-vector, vLLM smoke, and pilot cascade Slurm gates pass; after those gates pass it becomes the recommended 70B cascade path.
 
 ## Critical invariants
 

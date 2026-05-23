@@ -236,28 +236,30 @@ It should request two GPUs, set `CUDA_VISIBLE_DEVICES=0,1`, and run `./scripts/s
 
 The helper rejects 70B-class concurrent cascade sweeps by default. With two GPUs total, use tensor parallel for one 70B model at a time unless the experiment is redesigned to run clean and steered generations sequentially.
 
-**Storage-constrained alternative (~100 GB scratch):** The BF16 weights are ~140 GB and will not fit on a 100 GB scratch allocation. Use an AWQ INT4 checkpoint (~38 GB on disk) instead:
+**Storage-constrained alternative (~100 GB scratch):** The BF16 weights are ~140 GB and will not fit on a 100 GB scratch allocation. Use a GPTQ INT4 candidate checkpoint (~38 GB on disk) instead:
 
 ```bash
 python3 scripts/build_pde_sbatch.py serve-clean \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
-  --model hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4 \
-  --quantization awq_marlin > pde-vllm-70b.sbatch
+  --model hugging-quants/Meta-Llama-3.1-70B-Instruct-GPTQ-INT4 \
+  --quantization gptq_marlin > pde-vllm-70b.sbatch
 sbatch pde-vllm-70b.sbatch
 ```
 
-Approximate scratch budget with AWQ: conda env ~20 GB + 8B BF16 ~16 GB + 70B AWQ INT4 ~38 GB + caches/results ~10 GB = ~84 GB.
+Approximate scratch budget with GPTQ: conda env ~20 GB + 8B BF16 ~16 GB + 70B GPTQ INT4 ~38 GB + caches/results ~10 GB = ~84 GB.
 
 ## 10b. 70B Quantized Cascade Sweep
 
 To run the full cascade with a quantized 70B on both GPUs in one job (clean server on GPU 0, steered worker on GPU 1), first compute the 70B steering vector on the quantized model:
 
+This GPTQ path is the current validation candidate until the HF smoke, steering-vector, vLLM smoke, and pilot cascade Slurm gates pass; after those gates pass it becomes the recommended 70B cascade path.
+
 ```bash
 python3 scripts/build_pde_sbatch.py compute-vector \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
-  --model hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4 \
+  --model hugging-quants/Meta-Llama-3.1-70B-Instruct-GPTQ-INT4 \
   --output steering_vectors/harmfulness_llama3_70b.pt \
   --gpu-set 0 > pde-vector-70b.sbatch
 sbatch pde-vector-70b.sbatch
@@ -269,8 +271,8 @@ Then render and submit the self-hosted, resumable cascade job:
 python3 scripts/build_pde_sbatch.py cascade \
   --netid lding43 \
   --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
-  --model hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4 \
-  --quantization awq_marlin \
+  --model hugging-quants/Meta-Llama-3.1-70B-Instruct-GPTQ-INT4 \
+  --quantization gptq_marlin \
   --steering-vector steering_vectors/harmfulness_llama3_70b.pt \
   --experiments 1.2,1.3,1.4 --steering-strengths 0.5,1.0,1.5 \
   --task-indices 0,1,2,3,4 --resume > pde-cascade-70b.sbatch
