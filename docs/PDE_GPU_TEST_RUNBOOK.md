@@ -269,9 +269,30 @@ If you are only validating 70B on a wiped server, skip the 8B model download and
 
 ## 10b. 70B Quantized Cascade Sweep
 
-To run the full cascade with a quantized 70B on both GPUs in one job (clean server on GPU 0, steered worker on GPU 1), first compute the 70B steering vector on the quantized model:
+To run the full cascade with a quantized 70B on both GPUs in one job (clean server on GPU 0, steered worker on GPU 1), pass these gates in order:
 
-This GPTQ path is the current validation candidate until the HF smoke, steering-vector, vLLM smoke, and pilot cascade Slurm gates pass; after those gates pass it becomes the recommended 70B cascade path.
+1. HF authentication restored under scratch-backed `HF_HOME`.
+2. CPU pytest suite passes from VS Code Remote SSH.
+3. One-GPU HF Transformers smoke passes on the GPTQ INT4 checkpoint.
+4. The 70B steering vector is computed on the GPTQ INT4 checkpoint.
+5. Full matrix self-hosted cascade runs with `--resume`.
+
+This GPTQ path is the current validation candidate. Do not run BF16 or FP8 70B under the 100 GB scratch cap.
+
+Render and submit the one-GPU HF smoke job:
+
+```bash
+python3 scripts/build_pde_sbatch.py smoke-steered-quant \
+  --netid lding43 \
+  --repo-dir /local/scratch2/lding43/MAS-Activation-Cascades \
+  --model hugging-quants/Meta-Llama-3.1-70B-Instruct-GPTQ-INT4 \
+  --gpu-set 0 > pde-smoke-70b-gptq.sbatch
+sbatch pde-smoke-70b-gptq.sbatch
+```
+
+The smoke log must print `SMOKE PASS`. If it fails on download/authentication, fix Hugging Face access before continuing. If it fails with an `sm_120` or CUDA/NCCL compatibility warning, rerun setup from this branch and do not continue to the vector or cascade jobs.
+
+After the smoke passes, compute the 70B steering vector on the quantized model:
 
 ```bash
 python3 scripts/build_pde_sbatch.py compute-vector \
@@ -283,7 +304,7 @@ python3 scripts/build_pde_sbatch.py compute-vector \
 sbatch pde-vector-70b.sbatch
 ```
 
-Then render and submit the self-hosted, resumable cascade job:
+The vector job must write `steering_vectors/harmfulness_llama3_70b.pt`. After that file exists, render and submit the full self-hosted, resumable cascade matrix:
 
 ```bash
 python3 scripts/build_pde_sbatch.py cascade \
@@ -297,7 +318,7 @@ python3 scripts/build_pde_sbatch.py cascade \
 sbatch pde-cascade-70b.sbatch
 ```
 
-It requests two GPUs, backgrounds the clean vLLM server on GPU 0 with `--tensor-parallel-size 1`, health-checks `http://127.0.0.1:8000/health`, then runs the steered sweep on GPU 1 against `http://127.0.0.1:8000/v1`. Resubmit the same script to resume — finished cells are skipped via a `.cell_complete` sentinel.
+The full matrix is 3 experiments x 3 steering strengths x 5 tasks x 1 repeat = 45 cells. It requests two GPUs, backgrounds the clean vLLM server on GPU 0 with `--tensor-parallel-size 1`, health-checks `http://127.0.0.1:8000/health`, then runs the steered sweep on GPU 1 against `http://127.0.0.1:8000/v1`. Resubmit the same script to resume — finished cells are skipped via a `.cell_complete` sentinel.
 
 ## 11. Common Failures
 
