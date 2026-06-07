@@ -45,7 +45,7 @@ def build_pde_layout(
         if is_70b_class_model(model_name) and quantization is None:
             raise ValueError(
                 "70B-class cascade runs require a single-GPU-resident quantized model. "
-                "Pass --quantization (e.g. awq_marlin) so the clean and steered 70B "
+                "Pass --quantization (e.g. gptq_marlin) so the clean and steered 70B "
                 "each fit one GPU; use tensor-parallel mode only for serving."
             )
         return PdeLayout(

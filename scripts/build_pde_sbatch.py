@@ -38,7 +38,7 @@ def _build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--host", default="0.0.0.0")
     serve_parser.add_argument("--port", default="8000")
     serve_parser.add_argument("--max-model-len", default="4096")
-    serve_parser.add_argument("--quantization", default=None, help="vLLM quantization scheme, e.g. awq_marlin, awq, gptq, fp8")
+    serve_parser.add_argument("--quantization", default=None, help="vLLM quantization scheme, e.g. gptq_marlin, awq_marlin, fp8")
 
     vector_parser = subparsers.add_parser("compute-vector", help="Render a PDE steering-vector job")
     _add_common_args(vector_parser)
@@ -83,7 +83,7 @@ def _build_parser() -> argparse.ArgumentParser:
     cascade_parser.add_argument(
         "--quantization",
         default=None,
-        help="vLLM/HF quantization scheme (e.g. awq_marlin, fp8); required for a 70B cascade so each model fits one GPU",
+        help="vLLM/HF quantization scheme (e.g. gptq_marlin); required for a 70B cascade so each model fits one GPU",
     )
     cascade_parser.add_argument("--steering-vector", required=True)
     cascade_parser.add_argument("--experiments", default="1.2,1.3,1.4")

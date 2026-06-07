@@ -31,7 +31,7 @@ Clone or copy the repo into scratch. Example with Git:
 
 ```bash
 cd /local/scratch2/lding43
-git clone --branch 3.1-70B https://github.com/LeoDing-Error/MAS-Activation-Cascades.git MAS-Activation-Cascades
+git clone --branch pde-70b-minimal-testing https://github.com/LeoDing-Error/MAS-Activation-Cascades.git MAS-Activation-Cascades
 cd MAS-Activation-Cascades
 git branch --show-current
 ```
@@ -41,8 +41,8 @@ If the repo already exists:
 ```bash
 cd /local/scratch2/lding43/MAS-Activation-Cascades
 git fetch origin
-git checkout 3.1-70B
-git pull origin 3.1-70B
+git checkout pde-70b-minimal-testing
+git pull origin pde-70b-minimal-testing
 git branch --show-current
 ```
 
@@ -87,6 +87,8 @@ export TRANSFORMERS_CACHE="$SCRATCH/.cache/huggingface/transformers"
 export PIP_CACHE_DIR="$SCRATCH/.cache/pip"
 export TMPDIR="$SCRATCH/tmp"
 ```
+
+For the 100 GB scratch limit, do not download BF16 70B or FP8 70B checkpoints. The intended 70B path is the GPTQ INT4 checkpoint only, plus the `cascade` Conda environment and generated results.
 
 If you use a virtualenv instead of Conda for unrelated work, edit its `venv/bin/activate` and add:
 
@@ -147,6 +149,20 @@ Important constraints:
 - Do not update `third_party/refs.lock` unless you deliberately intend to change pinned third-party commits.
 - `vllm` belongs in PDE Slurm jobs for this branch.
 - PDE GPUs are Blackwell (`sm_120`). The environment must use CUDA 12.8+ compatible PyTorch/vLLM wheels. Do not use the old `torch==2.5.1` / CUDA 12.1 / `vllm==0.6.4` stack.
+
+After setup completes, restore Hugging Face authentication into the scratch-backed cache before running any 70B job:
+
+```bash
+cd /local/scratch2/lding43/MAS-Activation-Cascades
+export HF_HOME=/local/scratch2/lding43/.cache/huggingface
+export TRANSFORMERS_CACHE=/local/scratch2/lding43/.cache/huggingface/transformers
+read -rsp "HF token: " HF_TOKEN; echo
+conda run -n cascade huggingface-cli login --token "$HF_TOKEN"
+unset HF_TOKEN
+conda run -n cascade huggingface-cli whoami
+```
+
+The token must have access to `hugging-quants/Meta-Llama-3.1-70B-Instruct-GPTQ-INT4`; otherwise the smoke, vector, and cascade jobs will fail at download time.
 
 ## 6. Run Tests Through VS Code Remote SSH
 
@@ -248,6 +264,8 @@ sbatch pde-vllm-70b.sbatch
 ```
 
 Approximate scratch budget with GPTQ: conda env ~20 GB + 8B BF16 ~16 GB + 70B GPTQ INT4 ~38 GB + caches/results ~10 GB = ~84 GB.
+
+If you are only validating 70B on a wiped server, skip the 8B model download and keep the budget closer to: conda env ~20 GB + 70B GPTQ INT4 ~38 GB + caches/results ~10 GB = ~68 GB.
 
 ## 10b. 70B Quantized Cascade Sweep
 
