@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-COLAB_BRANCH = "feat/colab-full-sweep"
+COLAB_BRANCH = "main"
 NOTEBOOKS = (
     ROOT / "notebooks" / "colab_phase1_quickstart.ipynb",
     ROOT / "notebooks" / "colab_phase1_full_sweep.ipynb",

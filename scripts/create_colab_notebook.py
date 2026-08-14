@@ -99,7 +99,7 @@ import subprocess, os, pathlib
 
 REPO_URL = 'https://github.com/LeoDing-Error/MAS-Activation-Cascades.git'
 REPO_DIR = '/content/MAS-Activation-Cascades'
-COLAB_BRANCH = 'feat/colab-full-sweep'
+COLAB_BRANCH = 'main'
 
 if not pathlib.Path(REPO_DIR, '.git').exists():
     subprocess.run(

@@ -76,7 +76,7 @@ import os, subprocess
 
 REPO_URL = 'https://github.com/LeoDing-Error/MAS-Activation-Cascades.git'  # ← update to your fork if needed
 REPO_DIR = '/content/MAS-Activation-Cascades'
-COLAB_BRANCH = 'feat/colab-full-sweep'
+COLAB_BRANCH = 'main'
 
 if not os.path.exists(REPO_DIR + '/.git'):
     subprocess.run(
