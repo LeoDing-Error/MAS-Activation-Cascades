@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -55,3 +57,24 @@ def test_quickstart_generator_preserves_current_result_schema_parsing() -> None:
     assert "records = data['runs']" in source
     assert "condition.split('alpha_')[1]" in source
     assert "s['metrics']['mean_token_entropy']" in source
+
+
+def test_generated_notebooks_persist_artifacts_without_repo_symlinks() -> None:
+    for generator in GENERATORS:
+        subprocess.run([sys.executable, str(generator)], cwd=ROOT, check=True)
+
+    quickstart = _code_source(NOTEBOOKS[0])
+    full_sweep = _code_source(NOTEBOOKS[1])
+
+    for source in (quickstart, full_sweep):
+        assert "os.symlink" not in source
+        assert "HF_HOME'] = '/content/hf-cache'" in source
+        assert "PAIRS_PATH = f'{DRIVE_DIR}/data/contrastive_pairs/ta2_harmful_pairs.json'" in source
+        assert "VECTOR_PATH = f'{DRIVE_DIR}/steering_vectors/harmfulness_llama3_8b.pt'" in source
+        assert "LOCAL_VECTOR_PATH = '/content/harmfulness_llama3_8b.pt'" in source
+        assert "shutil.copy2(LOCAL_VECTOR_PATH, VECTOR_PATH)" in source
+
+    assert "RESULTS_DIR = f'{DRIVE_DIR}/results'" in quickstart
+    assert "'--results-dir', RESULTS_DIR" in quickstart
+    assert "SWEEP_RESULTS_ROOT = f'{DRIVE_DIR}/results/sweeps'" in full_sweep
+    assert "'--results-root', SWEEP_RESULTS_ROOT" in full_sweep

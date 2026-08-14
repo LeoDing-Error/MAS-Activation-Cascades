@@ -123,32 +123,39 @@ if r.returncode != 0:
 print("Smoke test passed ✓")
 """),
 
-    md("## 6 · Link Drive Storage into Repo Paths"),
+    md("""\
+## 6 · Configure Persistent Artifact Paths
+
+Artifacts use absolute Drive paths so the repository's tracked `.gitkeep`
+directories cannot accidentally redirect output to ephemeral storage. Model
+downloads and temporary vector files stay on the faster local VM disk.
+"""),
     code("""\
 import os
-links = {
-    'steering_vectors': f'{DRIVE_DIR}/steering_vectors',
-    'data/contrastive_pairs': f'{DRIVE_DIR}/data/contrastive_pairs',
-    'results': f'{DRIVE_DIR}/results',
-}
-for local_rel, drive_path in links.items():
-    local_abs = os.path.join(os.getcwd(), local_rel)
-    if os.path.islink(local_abs):
-        print(f"Already linked: {local_rel}")
-    elif os.path.exists(local_abs):
-        print(f"Exists (not a link): {local_rel} — skipping")
-    else:
-        os.makedirs(os.path.dirname(local_abs), exist_ok=True)
-        os.symlink(drive_path, local_abs)
-        print(f"Linked: {local_rel} → {drive_path}")
+from pathlib import Path
+
+os.environ['HF_HOME'] = '/content/hf-cache'
+os.environ['TRANSFORMERS_CACHE'] = '/content/hf-cache/transformers'
+
+PAIRS_PATH = f'{DRIVE_DIR}/data/contrastive_pairs/ta2_harmful_pairs.json'
+VECTOR_PATH = f'{DRIVE_DIR}/steering_vectors/harmfulness_llama3_8b.pt'
+ANALYSIS_PATH = f'{DRIVE_DIR}/steering_vectors/harmfulness_llama3_8b.analysis.pt'
+SWEEP_RESULTS_ROOT = f'{DRIVE_DIR}/results/sweeps'
+LOCAL_VECTOR_PATH = '/content/harmfulness_llama3_8b.pt'
+LOCAL_ANALYSIS_PATH = '/content/harmfulness_llama3_8b.analysis.pt'
+
+for artifact_path in (PAIRS_PATH, VECTOR_PATH, ANALYSIS_PATH):
+    Path(artifact_path).parent.mkdir(parents=True, exist_ok=True)
+Path(SWEEP_RESULTS_ROOT).mkdir(parents=True, exist_ok=True)
+Path(os.environ['HF_HOME']).mkdir(parents=True, exist_ok=True)
+
+print("Persistent artifacts:", DRIVE_DIR)
+print("Local model cache:", os.environ['HF_HOME'])
 """),
 
     md("## 7 · Ensure Contrastive Pairs and Steering Vector Exist"),
     code("""\
-import subprocess, os, torch
-
-PAIRS_PATH = 'data/contrastive_pairs/ta2_harmful_pairs.json'
-VECTOR_PATH = 'steering_vectors/harmfulness_llama3_8b.pt'
+import shutil, subprocess, os, torch
 
 if not os.path.exists(PAIRS_PATH):
     subprocess.run(['python', 'scripts/build_ta2_pairs.py', '--output', PAIRS_PATH], check=True)
@@ -161,13 +168,17 @@ if not os.path.exists(VECTOR_PATH):
         ['python', 'src/steering/compute_vectors.py',
          '--model', 'meta-llama/Meta-Llama-3.1-8B-Instruct',
          '--pairs-path', PAIRS_PATH,
-         '--output', VECTOR_PATH,
+         '--output', LOCAL_VECTOR_PATH,
          '--device', 'cuda'],
         check=True,
     )
+    shutil.copy2(LOCAL_ANALYSIS_PATH, ANALYSIS_PATH)
+    shutil.copy2(LOCAL_VECTOR_PATH, VECTOR_PATH)
+    meta = torch.load(VECTOR_PATH, weights_only=True)
+    print(f"Vector persisted (selected layer: {meta.get('selected_layer', '?')}).")
 else:
     meta = torch.load(VECTOR_PATH, weights_only=True)
-    print(f"Vector cached (optimal layer: {meta.get('optimal_layer', '?')}) — skipping.")
+    print(f"Vector cached (selected layer: {meta.get('selected_layer', '?')}) — skipping.")
 """),
 
     md("""\
@@ -216,7 +227,7 @@ cmd = [
     '--steering-strengths', '0.0,0.5,1.0,1.5,2.0',
     '--task-indices', '0,1,2,3,4',
     '--repeats', '3',
-    '--results-root', 'results/sweeps',
+    '--results-root', SWEEP_RESULTS_ROOT,
     '--clean-api-bases', 'http://127.0.0.1:8000/v1',
     '--max-new-tokens', '256',
     '--chat-turn-limit', '2',
@@ -249,15 +260,17 @@ else:
 import shutil, os, datetime
 
 stamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-archive_base = f'{DRIVE_DIR}/results/sweeps_archive_{stamp}'
-shutil.make_archive(archive_base, 'gztar', 'results/sweeps')
-print(f"Archive: {archive_base}.tar.gz")
+local_archive_base = f'/content/sweeps_archive_{stamp}'
+local_archive = shutil.make_archive(local_archive_base, 'gztar', SWEEP_RESULTS_ROOT)
+archive_path = f'{DRIVE_DIR}/results/sweeps_archive_{stamp}.tar.gz'
+shutil.copy2(local_archive, archive_path)
+print(f"Archive: {archive_path}")
 
 # Quick inventory of what got written
-for dirpath, _, filenames in os.walk('results/sweeps'):
+for dirpath, _, filenames in os.walk(SWEEP_RESULTS_ROOT):
     for fn in filenames:
         if fn.endswith('_summary.json'):
-            print(os.path.relpath(os.path.join(dirpath, fn), 'results/sweeps'))
+            print(os.path.relpath(os.path.join(dirpath, fn), SWEEP_RESULTS_ROOT))
 """),
 ]
 
