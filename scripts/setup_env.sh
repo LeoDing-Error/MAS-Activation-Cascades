@@ -26,7 +26,7 @@ ensure_command conda
 
 if conda_env_exists "$ENV_NAME"; then
   log "Updating conda env $ENV_NAME from environment.yml"
-  conda env update -y -n "$ENV_NAME" --file "$PROJECT_ROOT/environment.yml" --prune
+  conda env update -n "$ENV_NAME" --file "$PROJECT_ROOT/environment.yml" --prune
 else
   log "Creating conda env $ENV_NAME from environment.yml"
   conda env create -y -n "$ENV_NAME" --file "$PROJECT_ROOT/environment.yml"
@@ -37,6 +37,14 @@ pip_in_conda "$ENV_NAME" install --upgrade pip setuptools wheel
 
 log "Reinstalling project requirements into $ENV_NAME"
 pip_in_conda "$ENV_NAME" install -r "$PROJECT_ROOT/requirements.txt"
+
+if is_macos; then
+  log "Replacing pip PyTorch and scikit-learn wheels with Conda-forge builds on macOS"
+  pip_in_conda "$ENV_NAME" uninstall -y torch scikit-learn
+  conda install -y -n "$ENV_NAME" --override-channels -c conda-forge \
+    "pytorch>=2.4" "scikit-learn>=1.5.1"
+  pip_in_conda "$ENV_NAME" install -r "$PROJECT_ROOT/requirements.txt"
+fi
 
 if [[ "$INSTALL_CUDA121" -eq 1 ]]; then
   if is_macos; then
