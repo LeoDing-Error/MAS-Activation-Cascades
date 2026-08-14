@@ -97,15 +97,24 @@ S2_MD = """\
 S2_CODE = """\
 import subprocess, os, pathlib
 
-REPO_URL = 'https://github.com/YOUR_USERNAME/MAS-Activation-Cascades.git'
+REPO_URL = 'https://github.com/LeoDing-Error/MAS-Activation-Cascades.git'
 REPO_DIR = '/content/MAS-Activation-Cascades'
+COLAB_BRANCH = 'feat/colab-full-sweep'
 
 if not pathlib.Path(REPO_DIR, '.git').exists():
-    subprocess.run(['git', 'clone', REPO_URL, REPO_DIR], check=True)
-    print("Cloned repo to", REPO_DIR)
+    subprocess.run(
+        ['git', 'clone', '--branch', COLAB_BRANCH, '--single-branch', REPO_URL, REPO_DIR],
+        check=True,
+    )
+    print(f"Cloned {COLAB_BRANCH} to {REPO_DIR}")
 else:
-    subprocess.run(['git', '-C', REPO_DIR, 'pull', '--ff-only'], check=True)
-    print("Repo updated at", REPO_DIR)
+    subprocess.run(['git', '-C', REPO_DIR, 'fetch', 'origin', COLAB_BRANCH], check=True)
+    subprocess.run(['git', '-C', REPO_DIR, 'checkout', COLAB_BRANCH], check=True)
+    subprocess.run(
+        ['git', '-C', REPO_DIR, 'pull', '--ff-only', 'origin', COLAB_BRANCH],
+        check=True,
+    )
+    print(f"Updated {COLAB_BRANCH} at {REPO_DIR}")
 
 os.chdir(REPO_DIR)
 print("Working directory:", os.getcwd())
@@ -322,36 +331,41 @@ of steering strength α.
 S10_CODE = """\
 import json, pathlib
 import matplotlib.pyplot as plt
+from collections import defaultdict
 
 RESULTS_PATH = 'results/exp1_1/exp1_1_results.json'
 
 with open(RESULTS_PATH) as f:
-    records = json.load(f)
+    data = json.load(f)
 
-print(f"Loaded {len(records)} result records.")
+records = data['runs']
+print(f"Loaded {len(records)} run records.")
 
-# Collect data: {task: {alpha: entropy}}
-from collections import defaultdict
 task_data = defaultdict(dict)
 
 for rec in records:
-    task = rec.get('task', 'unknown')
-    alpha = rec.get('alpha', float('nan'))
-    # Handle both top-level and nested 'metrics' key
-    if 'entropy_mean' in rec:
-        entropy = rec['entropy_mean']
-    elif 'metrics' in rec and isinstance(rec['metrics'], dict):
-        entropy = rec['metrics'].get('entropy_mean', float('nan'))
-    else:
-        entropy = float('nan')
-    task_data[task][alpha] = entropy
+    condition = rec.get('condition', '')
+    try:
+        alpha = float(condition.split('alpha_')[1])
+    except (IndexError, ValueError):
+        continue
+
+    task_name = rec.get('task', {}).get('name', 'unknown')
+
+    entropies = [
+        s['metrics']['mean_token_entropy']
+        for s in rec.get('uncertainty', [])
+        if isinstance(s.get('metrics'), dict) and s['metrics'].get('mean_token_entropy') is not None
+    ]
+    entropy = sum(entropies) / len(entropies) if entropies else float('nan')
+    task_data[task_name][alpha] = entropy
 
 fig, ax = plt.subplots(figsize=(8, 5))
 
-for task, alpha_map in sorted(task_data.items()):
+for task_name, alpha_map in sorted(task_data.items()):
     alphas = sorted(alpha_map.keys())
     entropies = [alpha_map[a] for a in alphas]
-    ax.plot(alphas, entropies, marker='o', label=task)
+    ax.plot(alphas, entropies, marker='o', label=task_name)
 
 ax.set_xlabel('Steering strength α')
 ax.set_ylabel('Mean token entropy')

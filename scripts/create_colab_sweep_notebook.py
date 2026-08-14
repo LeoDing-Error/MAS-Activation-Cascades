@@ -76,11 +76,20 @@ import os, subprocess
 
 REPO_URL = 'https://github.com/LeoDing-Error/MAS-Activation-Cascades.git'  # ← update to your fork if needed
 REPO_DIR = '/content/MAS-Activation-Cascades'
+COLAB_BRANCH = 'feat/colab-full-sweep'
 
 if not os.path.exists(REPO_DIR + '/.git'):
-    subprocess.run(['git', 'clone', REPO_URL, REPO_DIR], check=True)
+    subprocess.run(
+        ['git', 'clone', '--branch', COLAB_BRANCH, '--single-branch', REPO_URL, REPO_DIR],
+        check=True,
+    )
 else:
-    subprocess.run(['git', '-C', REPO_DIR, 'pull', '--ff-only'], check=True)
+    subprocess.run(['git', '-C', REPO_DIR, 'fetch', 'origin', COLAB_BRANCH], check=True)
+    subprocess.run(['git', '-C', REPO_DIR, 'checkout', COLAB_BRANCH], check=True)
+    subprocess.run(
+        ['git', '-C', REPO_DIR, 'pull', '--ff-only', 'origin', COLAB_BRANCH],
+        check=True,
+    )
 
 os.chdir(REPO_DIR)
 print("Working directory:", os.getcwd())
