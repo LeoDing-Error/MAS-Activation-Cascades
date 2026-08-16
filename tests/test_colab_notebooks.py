@@ -11,10 +11,12 @@ COLAB_BRANCH = "main"
 NOTEBOOKS = (
     ROOT / "notebooks" / "colab_phase1_quickstart.ipynb",
     ROOT / "notebooks" / "colab_phase1_full_sweep.ipynb",
+    ROOT / "notebooks" / "colab_steering_calibration.ipynb",
 )
 GENERATORS = (
     ROOT / "scripts" / "create_colab_notebook.py",
     ROOT / "scripts" / "create_colab_sweep_notebook.py",
+    ROOT / "scripts" / "create_colab_calibration_notebook.py",
 )
 
 
@@ -78,3 +80,15 @@ def test_generated_notebooks_persist_artifacts_without_repo_symlinks() -> None:
     assert "'--results-dir', RESULTS_DIR" in quickstart
     assert "SWEEP_RESULTS_ROOT = f'{DRIVE_DIR}/results/sweeps'" in full_sweep
     assert "'--results-root', SWEEP_RESULTS_ROOT" in full_sweep
+
+
+def test_calibration_notebook_uses_drive_and_stops_for_blinded_scoring() -> None:
+    source = _code_source(ROOT / "notebooks" / "colab_steering_calibration.ipynb")
+    assert "CALIBRATION_DIR = f'{DRIVE_DIR}/results/steering_calibration'" in source
+    assert "run_steering_calibration.py', 'prepare'" in source
+    assert "run_steering_calibration.py', 'generate'" in source
+    assert "run_steering_calibration.py', 'blind'" in source
+    assert "manual_scores.csv" in source
+    assert "run_steering_calibration.py', 'summarize'" in source
+    assert "1.2" not in source
+    assert "os.symlink" not in source
