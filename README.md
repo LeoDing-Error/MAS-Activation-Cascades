@@ -108,7 +108,36 @@ Use `--limit <N>` only for smoke tests when you intentionally want a smaller sub
   steering_vectors/harmfulness_llama3_8b.pt
 ```
 
-### 4. Serve Clean Agents With vLLM
+### 4. Calibrate a Treatment Alpha Before Phase 1
+
+Before any multi-agent Phase 1 run, complete the [steering calibration notebook](notebooks/colab_steering_calibration.ipynb) on a CUDA Colab or Linux GPU runtime. You must first accept the gated [SORRY-Bench license](https://huggingface.co/datasets/sorry-bench/sorry-bench) on Hugging Face and provide an `HF_TOKEN` with access.
+
+The notebook runs the four CLI stages below and persists the private calibration artifacts to Drive:
+
+```bash
+# 1. Select the private prompt manifest.
+python experiments/run_steering_calibration.py prepare \
+  --ta2-pairs data/contrastive_pairs/ta2_harmful_pairs.json \
+  --output-dir results/steering_calibration
+
+# 2. Generate the complete 36-response calibration grid.
+python experiments/run_steering_calibration.py generate \
+  --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
+  --output-dir results/steering_calibration
+
+# 3. Create blinded rows for manual scoring.
+python experiments/run_steering_calibration.py blind \
+  --output-dir results/steering_calibration
+
+# 4. Summarize the completed blinded scores and select an alpha, if one passes.
+python experiments/run_steering_calibration.py summarize \
+  --output-dir results/steering_calibration \
+  --scores results/steering_calibration/manual_scores.csv
+```
+
+Do not use alpha 1.0 as the current default treatment: the existing 1.1 observation at that strength was output collapse. An entropy increase alone is collateral degradation, not evidence of targeted harmfulness steering or a text-mediated cascade. Experiments 1.2–1.4 remain blocked until this calibration selects an alpha.
+
+### 5. Serve Clean Agents With vLLM
 
 Run this on Linux or Colab, not macOS:
 
@@ -125,9 +154,10 @@ Practical GPU note:
 - Running experiments `1.2` to `1.4` with a clean served `Meta-Llama-3.1-8B-Instruct` plus a separate local steered copy is an A100-class workflow.
 - On a T4, treat this repo as a smoke-test setup unless you switch to the fallback model and reduce token budgets.
 
-### 5. Run Phase 1 Experiments
+### 6. Run Phase 1 Experiments
 
 ```bash
+# Only after the calibration gate selects a treatment alpha.
 ./scripts/run_phase1_local.sh 1.2 steering_vectors/harmfulness_llama3_8b.pt
 ./scripts/run_phase1_local.sh 1.3 steering_vectors/harmfulness_llama3_8b.pt
 ./scripts/run_phase1_local.sh 1.4 steering_vectors/harmfulness_llama3_8b.pt
@@ -149,9 +179,11 @@ For experiments `1.2` to `1.4`, `experiments/run_phase1.py` now requires `--clea
 - `src/topologies/runner.py`: single-agent, chain, and star topology runners
 - `src/analysis/cascade_analyzer.py`: cascade metrics, statistics, and reporting
 - `experiments/run_phase1.py`: phase 1 experiment CLI
+- `experiments/run_steering_calibration.py`: four-stage calibration CLI
 - `scripts/build_ta2_pairs.py`: builds contrastive pairs from the local TA2 clone
 - `scripts/serve_clean_model.sh`: starts an OpenAI-compatible vLLM server for clean agents
 - `scripts/run_phase1_local.sh`: convenience wrapper for local experiments
+- `notebooks/colab_steering_calibration.ipynb`: gated, blinded 36-response calibration workflow
 - `notebooks/run_experiments.ipynb`: Colab workflow for vector computation and experiment runs
 
 ## Outputs

@@ -6,7 +6,9 @@ This document describes the experimental infrastructure for testing whether acti
 
 **Core question:** If you compromise one agent via TA², do its outputs infect peer agents through normal message passing?
 
-**Status:** No precomputed TA² artifacts available. All steering vectors must be computed from scratch.
+**Status:** A local 8B TA² artifact now exists at `steering_vectors/harmfulness_llama3_8b.pt`, built from 520 construction pairs. Its selected layer is 25 and its vector norm is approximately 25.557. The artifact remains intentionally untracked; it is available locally, not as a committed project asset.
+
+Experiment 1.1 produced 15 records. At α=0, outputs were coherent; at α=0.5, one of three coding tasks degraded; and at α≥1.0, all tested outputs collapsed. Token entropy rose monotonically, but this is evidence of collateral degradation, not targeted harmfulness steering and not cascade evidence. The immediate gate is the 36-response, blinded manual-scoring calibration pilot. Experiments 1.2–1.4 remain blocked until that gate selects a candidate treatment alpha.
 
 ---
 
@@ -22,7 +24,7 @@ This document describes the experimental infrastructure for testing whether acti
 │   └── analysis/cascade_analyzer.py   # Cascade metrics and visualization
 ├── experiments/
 │   └── run_phase1.py                  # Phase 1 experiment scripts
-├── steering_vectors/                  # Computed vectors (to be populated)
+├── steering_vectors/                  # Local computed vectors (gitignored)
 └── results/                           # Experiment outputs
 ```
 
@@ -143,7 +145,7 @@ Post-hoc analysis of experiment results:
 
 **Setup:**
 ```
-A₀ (steered, α=1.0) → A₁ (clean)
+A₀ (steered, calibration-selected α) → A₁ (clean)
     implementer          reviewer
 ```
 
@@ -246,7 +248,7 @@ python experiments/run_phase1.py --experiment 1.1 \
 # Experiment 1.2: Two-agent cascade
 python experiments/run_phase1.py --experiment 1.2 \
     --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
-    --steering-strength 1.0 \
+    --steering-strength <calibration-selected-alpha> \
     --task-names is_prime,reverse_string \
     --clean-api-base http://127.0.0.1:8000/v1
 
@@ -362,8 +364,10 @@ For multi-task runs of experiments `1.2` to `1.4`, switch the example paths to a
 - Debug: Check hook registration, layer selection, vector magnitude
 - Verify with known-working TA² implementation
 
-**If steering works:**
-- Proceed to 1.2
+**If steering changes entropy or MSP:**
+- Do not treat that shift as a harmfulness or cascade result by itself.
+- Run the 36-response calibration pilot and use only an alpha that passes its blinded manual-scoring gate.
+- Experiments 1.2–1.4 remain blocked until calibration selects a candidate alpha.
 
 ### After Experiment 1.2
 
