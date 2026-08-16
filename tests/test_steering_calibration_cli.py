@@ -825,6 +825,52 @@ def test_sorry_download_uses_resolved_revision_for_both_files(tmp_path: Path, mo
     assert [record["high_level_domain"] for record in records] == list(SORRY_DOMAINS)
 
 
+def test_sorry_download_maps_current_literal_list_metadata_categories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Accept the current SORRY-Bench three-list metadata without executing it."""
+    from experiments.run_steering_calibration import _download_sorry_records
+
+    question_path = tmp_path / "question.jsonl"
+    question_path.write_text("\n".join(
+        json.dumps({"question_id": index, "category": str(index), "turns": [f"prompt {index}"]})
+        for index in range(1, 46)
+    ), encoding="utf-8")
+    meta_path = tmp_path / "meta_info.py"
+    meta_path.write_text(
+        "category_descriptions = " + repr([f"Full category {index}" for index in range(1, 46)]) + "\n"
+        "category_descriptions_short = " + repr([f"Short category {index}" for index in range(1, 46)]) + "\n"
+        "category_descriptions_shortest = " + repr([f"Brief category {index}" for index in range(1, 46)]) + "\n",
+        encoding="utf-8",
+    )
+
+    class FakeApi:
+        def dataset_info(self, _: str) -> SimpleNamespace:
+            return SimpleNamespace(sha="resolved-sha")
+
+    def fake_download(_: str, **kwargs: object) -> str:
+        return str(question_path if kwargs["filename"] == "question.jsonl" else meta_path)
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=FakeApi, hf_hub_download=fake_download))
+    records, revision = _download_sorry_records()
+
+    assert revision == "resolved-sha"
+    assert [(record["category"], record["high_level_domain"]) for record in records] == [
+        *((str(index), "hate_speech_generation") for index in range(1, 7)),
+        *((str(index), "assistance_with_crimes_or_torts") for index in range(7, 26)),
+        *((str(index), "potentially_inappropriate_topics") for index in range(26, 41)),
+        *((str(index), "potentially_unqualified_advice") for index in range(41, 46)),
+    ]
+
+
+def test_literal_meta_mapping_rejects_malformed_authoritative_category_list() -> None:
+    from experiments.run_steering_calibration import _literal_category_mapping
+
+    malformed = "category_descriptions = " + repr([f"Category {index}" for index in range(1, 45)])
+    with pytest.raises(ValueError, match="category_descriptions"):
+        _literal_category_mapping(malformed)
+
+
 def test_generate_requires_complete_matching_public_manifest(tmp_path: Path) -> None:
     from experiments.run_steering_calibration import generate_calibration, prepare_calibration
 

@@ -821,23 +821,57 @@ def summarize_calibration_run(*, output_dir: Path, scores_path: Path) -> dict[st
 
 
 def _literal_category_mapping(source: str) -> dict[str, str]:
-    """Extract only a literal category-to-domain mapping from meta_info.py."""
+    """Extract a safe, literal category-to-domain mapping from meta_info.py."""
     tree = ast.parse(source)
     candidates: list[dict[str, str]] = []
+    category_description_values: list[object] = []
     for node in tree.body:
         if not isinstance(node, (ast.Assign, ast.AnnAssign)):
             continue
         value_node = node.value
         if value_node is None:
             continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        is_category_descriptions = any(
+            isinstance(target, ast.Name) and target.id == "category_descriptions"
+            for target in targets
+        )
         try:
             value = ast.literal_eval(value_node)
         except (ValueError, TypeError):
+            if is_category_descriptions:
+                raise ValueError(
+                    "Literal SORRY-Bench category_descriptions must be exactly 45 nonempty strings"
+                ) from None
             continue
-        if isinstance(value, dict) and value and all(isinstance(key, str) and isinstance(item, str) for key, item in value.items()):
+        if is_category_descriptions:
+            category_description_values.append(value)
+            continue
+        if isinstance(value, dict) and value and all(
+            isinstance(key, str) and key.strip() and isinstance(item, str)
+            for key, item in value.items()
+        ):
             mapping = {str(key): str(item) for key, item in value.items()}
             if set(mapping.values()).issubset(set(SORRY_DOMAINS)):
                 candidates.append(mapping)
+    if category_description_values:
+        if len(category_description_values) != 1:
+            raise ValueError("Could not find exactly one literal SORRY-Bench category_descriptions list")
+        category_descriptions = category_description_values[0]
+        if (
+            not isinstance(category_descriptions, list)
+            or len(category_descriptions) != 45
+            or any(not isinstance(description, str) or not description.strip() for description in category_descriptions)
+        ):
+            raise ValueError(
+                "Literal SORRY-Bench category_descriptions must be exactly 45 nonempty strings"
+            )
+        return {
+            **{str(category): SORRY_DOMAINS[0] for category in range(1, 7)},
+            **{str(category): SORRY_DOMAINS[1] for category in range(7, 26)},
+            **{str(category): SORRY_DOMAINS[2] for category in range(26, 41)},
+            **{str(category): SORRY_DOMAINS[3] for category in range(41, 46)},
+        }
     if len(candidates) != 1:
         raise ValueError("Could not find one literal SORRY-Bench category/domain mapping")
     return candidates[0]
