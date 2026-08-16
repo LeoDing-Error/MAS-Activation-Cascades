@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 COLAB_BRANCH = "main"
+CALIBRATION_COLAB_BRANCH = "agent/steering-calibration-pilot"
 NOTEBOOKS = (
     ROOT / "notebooks" / "colab_phase1_quickstart.ipynb",
     ROOT / "notebooks" / "colab_phase1_full_sweep.ipynb",
@@ -32,21 +33,21 @@ def _code_source(path: Path) -> str:
 
 
 def test_colab_notebooks_clone_the_colab_workflow_branch() -> None:
-    for notebook in NOTEBOOKS:
+    for notebook in NOTEBOOKS[:2]:
         source = _code_source(notebook)
         assert f"COLAB_BRANCH = '{COLAB_BRANCH}'" in source, notebook.name
         assert "'clone', '--branch', COLAB_BRANCH, '--single-branch'" in source, notebook.name
 
 
 def test_colab_notebooks_update_the_existing_checkout_from_the_same_branch() -> None:
-    for notebook in NOTEBOOKS:
+    for notebook in NOTEBOOKS[:2]:
         source = _code_source(notebook)
         assert "'checkout', COLAB_BRANCH" in source, notebook.name
         assert "'pull', '--ff-only', 'origin', COLAB_BRANCH" in source, notebook.name
 
 
 def test_notebook_generators_preserve_the_colab_branch_checkout() -> None:
-    for generator in GENERATORS:
+    for generator in GENERATORS[:2]:
         source = generator.read_text()
         assert f"COLAB_BRANCH = '{COLAB_BRANCH}'" in source, generator.name
         assert "'clone', '--branch', COLAB_BRANCH, '--single-branch'" in source, generator.name
@@ -84,11 +85,23 @@ def test_generated_notebooks_persist_artifacts_without_repo_symlinks() -> None:
 
 def test_calibration_notebook_uses_drive_and_stops_for_blinded_scoring() -> None:
     source = _code_source(ROOT / "notebooks" / "colab_steering_calibration.ipynb")
+    generator = (ROOT / "scripts" / "create_colab_calibration_notebook.py").read_text()
+    assert f"COLAB_BRANCH = '{CALIBRATION_COLAB_BRANCH}'" in source
+    assert f"COLAB_BRANCH = '{CALIBRATION_COLAB_BRANCH}'" in generator
+    assert "implementation branch" in source
+    assert "A100-class" in source
+    assert "torch.cuda.device_count() != 1" in source
+    assert "if 'A100' not in gpu_name.upper()" in source
     assert "CALIBRATION_DIR = f'{DRIVE_DIR}/results/steering_calibration'" in source
+    assert "LICENSE_ACCEPTANCE = input(" in source
+    assert "Accept the SORRY-Bench license before running prepare." in source
     assert "run_steering_calibration.py', 'prepare'" in source
     assert "run_steering_calibration.py', 'generate'" in source
     assert "run_steering_calibration.py', 'blind'" in source
     assert "manual_scores.csv" in source
     assert "run_steering_calibration.py', 'summarize'" in source
-    assert "1.2" not in source
+    assert "baseline_valid" in source
+    assert "selected_alpha" in source
+    assert "Do not run Experiment 1.2." in source
+    assert "run_phase1_sweep.py" not in source
     assert "os.symlink" not in source

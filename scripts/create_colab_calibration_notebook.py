@@ -17,7 +17,7 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "notebooks" / "colab_steering_calibration.ipynb"
-COLAB_BRANCH = 'main'
+COLAB_BRANCH = 'agent/steering-calibration-pilot'
 
 
 def md(cell_id: str, source: str) -> nbformat.NotebookNode:
@@ -42,9 +42,9 @@ TA2 contrastive pairs and harmfulness steering vector. It writes all private
 calibration artifacts to Drive, generates 36 deterministic responses, and
 requires blinded manual scoring before it can summarize a candidate alpha.
 
-**Before running:** use a Colab GPU runtime with exactly one CUDA GPU and add a
-Hugging Face token named `HF_TOKEN` to Colab Secrets. The token needs access to
-both the Llama model and the gated SORRY-Bench dataset.
+**Before running:** select an **A100-class** Colab GPU runtime with exactly one
+CUDA GPU and add a Hugging Face token named `HF_TOKEN` to Colab Secrets. The
+token needs access to both the Llama model and the gated SORRY-Bench dataset.
 """),
     md("gpu-heading", "## 1 · Confirm GPU"),
     code("confirm-gpu", """import torch
@@ -53,7 +53,10 @@ if not torch.cuda.is_available():
     raise RuntimeError('A CUDA GPU runtime is required for steering calibration.')
 if torch.cuda.device_count() != 1:
     raise RuntimeError(f'Expected exactly one CUDA GPU, found {torch.cuda.device_count()}.')
-print('CUDA GPU:', torch.cuda.get_device_name(0))
+gpu_name = torch.cuda.get_device_name(0)
+if 'A100' not in gpu_name.upper():
+    raise RuntimeError(f'Expected an A100-class GPU for this calibration, found: {gpu_name}')
+print('CUDA GPU:', gpu_name)
 """),
     md("drive-heading", "## 2 · Mount Google Drive"),
     code("mount-drive", """from google.colab import drive
@@ -71,7 +74,7 @@ import subprocess
 
 REPO_URL = 'https://github.com/LeoDing-Error/MAS-Activation-Cascades.git'  # Update to your fork if needed.
 REPO_DIR = '/content/MAS-Activation-Cascades'
-COLAB_BRANCH = 'main'
+COLAB_BRANCH = 'agent/steering-calibration-pilot'  # implementation branch for this handoff.
 
 if not os.path.exists(REPO_DIR + '/.git'):
     subprocess.run(
@@ -98,7 +101,21 @@ os.environ['HF_TOKEN'] = token
 from huggingface_hub import whoami
 print('Logged in as:', whoami(token=token)['name'])
 """),
-    md("setup-heading", "## 5 · Install Dependencies and Smoke Test"),
+    md("license-heading", """## 5 · Accept the SORRY-Bench License Prerequisite
+
+Before preparing prompts, open the
+`sorry-bench/sorry-bench-202503` dataset page while logged in to Hugging Face
+and accept its license. This is an unconditional prerequisite: do not run the
+prepare step until access is granted to the same account as `HF_TOKEN`.
+"""),
+    code("confirm-license", """LICENSE_ACCEPTANCE = input(
+    'After accepting the SORRY-Bench license in Hugging Face, type ACCEPT to continue: '
+).strip()
+if LICENSE_ACCEPTANCE != 'ACCEPT':
+    raise RuntimeError('Accept the SORRY-Bench license before running prepare.')
+print('License prerequisite confirmed.')
+"""),
+    md("setup-heading", "## 6 · Install Dependencies and Smoke Test"),
     code("setup-colab", """import subprocess
 
 result = subprocess.run(['bash', 'scripts/setup_colab.sh'])
@@ -110,7 +127,7 @@ if result.returncode != 0:
     raise RuntimeError('Smoke test failed — fix the reported issue before continuing')
 print('Colab environment is ready.')
 """),
-    md("paths-heading", "## 6 · Use Existing Drive Artifacts"),
+    md("paths-heading", "## 7 · Use Existing Drive Artifacts"),
     code("persistent-paths", """import os
 from pathlib import Path
 
@@ -131,13 +148,13 @@ print('TA2 pairs:', PAIRS_PATH)
 print('Steering vector:', VECTOR_PATH)
 print('Private calibration directory:', CALIBRATION_DIR)
 """),
-    md("prepare-heading", """## 7 · Prepare the Private Prompt Manifest
+    md("prepare-heading", """## 8 · Prepare the Private Prompt Manifest
 
 This downloads and selects the calibration prompts into the private Drive
-directory. If the command reports a 401 or 403, open the
-`sorry-bench/sorry-bench-202503` dataset page while logged in to Hugging Face,
-accept its license, confirm that `HF_TOKEN` is allowed in this notebook, then
-rerun this cell. Do not copy dataset prompt text into the notebook or repository.
+directory. License acceptance was confirmed in the preceding prerequisite cell.
+If this command still reports a 401 or 403, verify that `HF_TOKEN` belongs to
+the account that accepted the license, then rerun it. Do not copy dataset prompt
+text into the notebook or repository.
 """),
     code("prepare-calibration", """import subprocess
 
@@ -153,7 +170,7 @@ except subprocess.CalledProcessError as error:
         'Prepare failed. For a 401/403, accept the SORRY-Bench license on Hugging Face and enable HF_TOKEN access, then rerun.'
     ) from error
 """),
-    md("metadata-heading", "## 8 · Inspect Public Prompt Metadata Only"),
+    md("metadata-heading", "## 9 · Inspect Public Prompt Metadata Only"),
     code("show-public-metadata", """import json
 from pathlib import Path
 
@@ -165,7 +182,7 @@ for prompt in manifest['prompts']:
         for key in ('prompt_id', 'source', 'source_id', 'category', 'high_level_domain', 'expected_label', 'prompt_sha256')
     })
 """),
-    md("generate-heading", "## 9 · Generate the Resumable Calibration Grid"),
+    md("generate-heading", "## 10 · Generate the Resumable Calibration Grid"),
     code("generate-calibration", """import subprocess
 
 cmd = [
@@ -177,7 +194,7 @@ print('Launching resumable calibration generation.')
 subprocess.run(cmd, check=True)
 print('Generation complete; rerun this cell after an interruption to resume.')
 """),
-    md("blind-heading", "## 10 · Create the Blinded Scoring File"),
+    md("blind-heading", "## 11 · Create the Blinded Scoring File"),
     code("blind-calibration", """import subprocess
 
 subprocess.run([
@@ -186,7 +203,7 @@ subprocess.run([
 ], check=True)
 print('Blinded scoring file:', f'{CALIBRATION_DIR}/blind_scoring.csv')
 """),
-    md("score-heading", """## 11 · Stop and Score Blindly
+    md("score-heading", """## 12 · Stop and Score Blindly
 
 In Drive, copy `blind_scoring.csv` to `manual_scores.csv` in the same
 calibration directory. Fill every scoring column for every response, retaining
@@ -202,8 +219,14 @@ print('  repetitive and truncated: use true or false')
 print(f'Fill every scoring column in: {CALIBRATION_DIR}/manual_scores.csv')
 raise RuntimeError('STOP: complete blinded manual scoring before opening condition_key.json or running summarize.')
 """),
-    md("summary-heading", "## 12 · Summarize After Complete Manual Scoring"),
-    code("summarize-calibration", """import subprocess
+    md("summary-heading", """## 13 · Summarize After Complete Manual Scoring
+
+After this cell, report the `baseline_valid` result and the `selected_alpha`, or
+report that there is no coherent alpha. Do not run Experiment 1.2 from this
+pilot, regardless of the gate result.
+"""),
+    code("summarize-calibration", """import json
+import subprocess
 from pathlib import Path
 
 scores_path = Path(CALIBRATION_DIR) / 'manual_scores.csv'
@@ -217,8 +240,14 @@ subprocess.run([
 ], check=True)
 
 summary = Path(CALIBRATION_DIR) / 'summary.json'
+payload = json.loads(summary.read_text(encoding='utf-8'))
 print('Gate result written to:', summary)
-print(summary.read_text(encoding='utf-8'))
+print(f"Report baseline_valid={payload['baseline_valid']}")
+if payload['selected_alpha'] is None:
+    print('Report selected_alpha: no coherent alpha')
+else:
+    print(f"Report selected_alpha={payload['selected_alpha']}")
+print('Do not run Experiment 1.2.')
 """),
 ]
 
