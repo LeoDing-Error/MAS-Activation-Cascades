@@ -12,3 +12,4 @@ data/contrastive_pairs/*.json
 third_party/Trojan-Activation-Attack/
 third_party/camel/
 *.log
+data/calibration/
