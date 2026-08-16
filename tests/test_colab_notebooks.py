@@ -84,17 +84,28 @@ def test_generated_notebooks_persist_artifacts_without_repo_symlinks() -> None:
 
 
 def test_calibration_notebook_uses_drive_and_stops_for_blinded_scoring() -> None:
+    notebook = json.loads((ROOT / "notebooks" / "colab_steering_calibration.ipynb").read_text())
     source = _code_source(ROOT / "notebooks" / "colab_steering_calibration.ipynb")
     generator = (ROOT / "scripts" / "create_colab_calibration_notebook.py").read_text()
     assert f"COLAB_BRANCH = '{CALIBRATION_COLAB_BRANCH}'" in source
     assert f"COLAB_BRANCH = '{CALIBRATION_COLAB_BRANCH}'" in generator
     assert "implementation branch" in source
+    assert "'clone', '--branch', COLAB_BRANCH, '--single-branch'" in source
+    assert "'checkout', COLAB_BRANCH" in source
+    assert "'pull', '--ff-only', 'origin', COLAB_BRANCH" in source
     assert "A100-class" in source
     assert "torch.cuda.device_count() != 1" in source
     assert "if 'A100' not in gpu_name.upper()" in source
     assert "CALIBRATION_DIR = f'{DRIVE_DIR}/results/steering_calibration'" in source
     assert "LICENSE_ACCEPTANCE = input(" in source
     assert "Accept the SORRY-Bench license before running prepare." in source
+    prepare_cell = next(cell for cell in notebook["cells"] if cell["id"] == "prepare-calibration")
+    prepare_source = prepare_cell["source"]
+    if isinstance(prepare_source, list):
+        prepare_source = "".join(prepare_source)
+    guard = "if globals().get('LICENSE_ACCEPTANCE') != 'ACCEPT':"
+    assert guard in prepare_source
+    assert prepare_source.index(guard) < prepare_source.index("cmd = [")
     assert "run_steering_calibration.py', 'prepare'" in source
     assert "run_steering_calibration.py', 'generate'" in source
     assert "run_steering_calibration.py', 'blind'" in source

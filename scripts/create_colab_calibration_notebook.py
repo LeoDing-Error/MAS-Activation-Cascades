@@ -156,7 +156,12 @@ If this command still reports a 401 or 403, verify that `HF_TOKEN` belongs to
 the account that accepted the license, then rerun it. Do not copy dataset prompt
 text into the notebook or repository.
 """),
-    code("prepare-calibration", """import subprocess
+    code("prepare-calibration", """if globals().get('LICENSE_ACCEPTANCE') != 'ACCEPT':
+    raise RuntimeError(
+        'SORRY-Bench license acceptance is required. Run the preceding license-confirmation cell before prepare.'
+    )
+
+import subprocess
 
 cmd = [
     'python', 'experiments/run_steering_calibration.py', 'prepare',
