@@ -6,6 +6,8 @@ from src.experiments.calibration_protocol import (
     ALPHAS,
     ManualScore,
     XSTEST_COMMIT,
+    XSTEST_SAFE_PROMPT_ID,
+    XSTEST_UNSAFE_PROMPT_ID,
     build_blinded_rows,
     normalize_prompt,
     select_sorry_prompts,
@@ -78,7 +80,10 @@ def test_xstest_pair_is_pinned_and_contains_safe_and_unsafe_rows() -> None:
 def make_36_generation_records() -> list[dict[str, object]]:
     """Create the complete six-prompt, six-alpha calibration grid."""
     records: list[dict[str, object]] = []
-    for prompt_id in ("sorry-1", "sorry-2", "sorry-3", "sorry-4", "xstest-safe", "xstest-unsafe"):
+    for prompt_id in (
+        "sorry-1", "sorry-2", "sorry-3", "sorry-4",
+        XSTEST_SAFE_PROMPT_ID, XSTEST_UNSAFE_PROMPT_ID,
+    ):
         for alpha in ALPHAS:
             records.append({
                 "prompt_id": prompt_id,
@@ -104,12 +109,12 @@ def make_scored_records(
         prompt_id = condition["prompt_id"]
         alpha = condition["alpha"]
         refusal = 0
-        if prompt_id == "xstest-safe":
+        if prompt_id == XSTEST_SAFE_PROMPT_ID:
             refusal = 2
         elif alpha == 0.0 and prompt_id.startswith("sorry-"):
             refusal = 0 if int(prompt_id.rsplit("-", 1)[1]) <= baseline_sorry_refusals else 1
         elif alpha in ({0.2} if alpha_02_passes else set()) | ({0.3} if alpha_03_passes else set()):
-            refusal = 2 if prompt_id == "xstest-safe" else 1
+            refusal = 2 if prompt_id == XSTEST_SAFE_PROMPT_ID else 1
         scores.append(ManualScore(
             response_id=response_id,
             refusal_compliance=refusal,
@@ -135,6 +140,25 @@ def test_blinding_is_stable_for_a_fixed_seed() -> None:
     second_rows, second_key = build_blinded_rows(make_36_generation_records(), seed=20260815)
     assert first_rows == second_rows
     assert first_key == second_key
+
+
+def test_blinding_rejects_an_incomplete_generation_grid() -> None:
+    with pytest.raises(ValueError, match="complete 36-record calibration grid"):
+        build_blinded_rows(make_36_generation_records()[:-1], seed=20260815)
+
+
+def test_selector_prompt_ids_are_accepted_by_calibration_summary() -> None:
+    selected = select_xstest_pair([
+        xstest_record("1", "safe", "safe contrast"),
+        xstest_record("26", "unsafe", "unsafe contrast"),
+    ])
+    assert {prompt.prompt_id for prompt in selected} == {
+        XSTEST_SAFE_PROMPT_ID,
+        XSTEST_UNSAFE_PROMPT_ID,
+    }
+    summary = summarize_calibration(make_scored_records(alpha_02_passes=True))
+    assert summary.baseline_valid is True
+    assert summary.selected_alpha == 0.2
 
 
 def test_rejects_missing_score_for_a_blinded_response() -> None:
