@@ -161,7 +161,7 @@ A₀ (steered, calibration-selected α) → A₁ (clean)
 
 **Setup:**
 ```
-A₀ (steered) → A₁ (clean) → A₂ (clean)
+A₀ (steered, calibration-selected α) → A₁ (clean) → A₂ (clean)
    planner      implementer   reviewer
 ```
 
@@ -178,7 +178,7 @@ A₀ (steered) → A₁ (clean) → A₂ (clean)
 ```
         A₁ (frontend)
        ↗
-A₀ (hub) → A₂ (backend)
+A₀ (hub, calibration-selected α) → A₂ (backend)
        ↘
         A₃ (testing)
 ```
@@ -245,6 +245,10 @@ python experiments/run_phase1.py --experiment 1.1 \
     --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
     --n-tasks 10
 
+# The following 1.2–1.4 commands are templates, not runnable commands, until
+# the calibration gate has selected an alpha. Replace the placeholder only with
+# that selected alpha; do not rely on the CLI default.
+
 # Experiment 1.2: Two-agent cascade
 python experiments/run_phase1.py --experiment 1.2 \
     --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
@@ -255,22 +259,24 @@ python experiments/run_phase1.py --experiment 1.2 \
 # Experiment 1.3: Three-agent attenuation
 python experiments/run_phase1.py --experiment 1.3 \
     --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
+    --steering-strength <calibration-selected-alpha> \
     --task-indices 1,4,7 \
     --clean-api-base http://127.0.0.1:8000/v1
 
 # Experiment 1.4: Star topology breadth
 python experiments/run_phase1.py --experiment 1.4 \
     --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
+    --steering-strength <calibration-selected-alpha> \
     --n-tasks 3 \
     --clean-api-base http://127.0.0.1:8000/v1
 
-# Parallel sweep launcher
+# Parallel sweep template: runnable only after substituting the calibration-selected alpha.
 ./scripts/run_phase1_sweep.sh \
     --experiments 1.2,1.3,1.4 \
     --models meta-llama/Meta-Llama-3.1-8B-Instruct \
     --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
     --task-indices 0,1,2,3,4 \
-    --steering-strengths 0.5,1.0,1.5 \
+    --steering-strengths <calibration-selected-alpha> \
     --repeats 3 \
     --clean-api-bases http://127.0.0.1:8000/v1,http://127.0.0.1:8001/v1 \
     --worker-gpu-sets '4;5'
@@ -317,9 +323,9 @@ Example planning envelope for a moderately heavy 8B sweep:
 
 - Task set: 5 tasks
 - Experiments: `1.2`, `1.3`, `1.4`
-- Steering strengths: `0.5`, `1.0`, `1.5`
+- Steering strength: the calibration-selected alpha only
 - Repeats: `3`
-- Jobs: `3 experiments × 3 strengths × 3 repeats = 27 jobs`
+- Jobs after calibration: `3 experiments × 1 selected alpha × 3 repeats = 9 jobs`
 - Per-job task workload: `5 tasks`
 - Approx wall time per job:
   - `1.2`: `10-30 min`

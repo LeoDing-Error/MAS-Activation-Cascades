@@ -156,17 +156,24 @@ Practical GPU note:
 
 ### 6. Run Phase 1 Experiments
 
-```bash
-# Only after the calibration gate selects a treatment alpha.
-./scripts/run_phase1_local.sh 1.2 steering_vectors/harmfulness_llama3_8b.pt
-./scripts/run_phase1_local.sh 1.3 steering_vectors/harmfulness_llama3_8b.pt
-./scripts/run_phase1_local.sh 1.4 steering_vectors/harmfulness_llama3_8b.pt
-```
-
-This wrapper assumes the clean agents are served through vLLM at `http://127.0.0.1:8000/v1`. Override with:
+Experiments 1.2–1.4 are still blocked. Do not use `scripts/run_phase1_local.sh` for the current treatment: it does not forward a steering-strength argument and would silently use the CLI's default alpha 1.0, the observed collapse treatment. After the calibration gate selects an alpha and the direct CLI invocation below has been verified for that selected value, use these templates with the placeholder replaced. They are intentionally non-runnable until then:
 
 ```bash
-CLEAN_API_BASE=http://host:port/v1 ./scripts/run_phase1_local.sh 1.2 steering_vectors/harmfulness_llama3_8b.pt
+# Replace <calibration-selected-alpha> only after the blinded gate passes.
+python experiments/run_phase1.py --experiment 1.2 \
+  --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
+  --steering-strength <calibration-selected-alpha> \
+  --clean-api-base http://127.0.0.1:8000/v1
+
+python experiments/run_phase1.py --experiment 1.3 \
+  --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
+  --steering-strength <calibration-selected-alpha> \
+  --clean-api-base http://127.0.0.1:8000/v1
+
+python experiments/run_phase1.py --experiment 1.4 \
+  --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
+  --steering-strength <calibration-selected-alpha> \
+  --clean-api-base http://127.0.0.1:8000/v1
 ```
 
 For experiments `1.2` to `1.4`, `experiments/run_phase1.py` now requires `--clean-api-base` by default. That guard is intentional: without a served clean-model backend, those experiments would instantiate multiple local clean model copies in one process and will usually OOM on a single GPU.
