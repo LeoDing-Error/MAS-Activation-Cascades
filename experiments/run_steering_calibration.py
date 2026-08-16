@@ -825,6 +825,10 @@ _CURRENT_SORRY_METADATA_NAMES = (
     "category_descriptions_short",
     "category_descriptions_shortest",
 )
+_LEGACY_SORRY_METADATA_NAME = "CATEGORY_TO_DOMAIN"
+_AUTHORITATIVE_SORRY_METADATA_NAMES = frozenset(
+    (*_CURRENT_SORRY_METADATA_NAMES, _LEGACY_SORRY_METADATA_NAME)
+)
 
 
 def _literal_category_mapping(source: str) -> dict[str, str]:
@@ -840,59 +844,28 @@ def _literal_category_mapping_with_schema(source: str) -> tuple[dict[str, str], 
     except SyntaxError as error:
         raise ValueError("Invalid literal SORRY-Bench metadata schema") from error
 
-    current_values: dict[str, list[object]] = {name: [] for name in _CURRENT_SORRY_METADATA_NAMES}
-    legacy_candidates: list[dict[str, str]] = []
-    expected_domains = set(SORRY_DOMAINS)
-    for node in tree.body:
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-            continue
-        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        current_targets = {
-            target.id
-            for target in ast.walk(node)
-            if isinstance(target, ast.Name) and isinstance(target.ctx, ast.Store)
-            and target.id in _CURRENT_SORRY_METADATA_NAMES
-        }
-        if current_targets:
-            if (
-                len(current_targets) != 1
-                or len(targets) != 1
-                or not isinstance(targets[0], ast.Name)
-                or targets[0].id not in current_targets
-            ):
-                raise ValueError("Current SORRY-Bench metadata assignments must use one simple name")
-            value_node = node.value
-            try:
-                value = ast.literal_eval(value_node)
-            except (ValueError, TypeError):
-                raise ValueError(
-                    "Current SORRY-Bench category descriptions must be literal lists"
-                ) from None
-            current_values[targets[0].id].append(value)
-            continue
-        value_node = node.value
-        if value_node is None:
-            continue
-        try:
-            value = ast.literal_eval(value_node)
-        except (ValueError, TypeError):
-            continue
-        if isinstance(value, dict) and value and all(
-            isinstance(key, str) and key.strip() and isinstance(item, str)
-            for key, item in value.items()
-        ):
-            mapping = {str(key): str(item) for key, item in value.items()}
-            if set(mapping.values()).issubset(expected_domains):
-                legacy_candidates.append(mapping)
+    assignments = _authoritative_sorry_metadata_assignments(tree)
+    current_assignments = {
+        name: assignments[name]
+        for name in _CURRENT_SORRY_METADATA_NAMES
+    }
+    legacy_assignments = assignments[_LEGACY_SORRY_METADATA_NAME]
+    has_current_schema = any(current_assignments.values())
+    has_legacy_schema = bool(legacy_assignments)
+    if has_current_schema and has_legacy_schema:
+        raise ValueError("SORRY-Bench metadata must contain exactly one schema")
 
-    has_current_schema = any(current_values.values())
+    expected_domains = set(SORRY_DOMAINS)
     if has_current_schema:
-        if legacy_candidates:
-            raise ValueError("SORRY-Bench metadata must contain exactly one schema")
-        for name, values in current_values.items():
+        for name, values in current_assignments.items():
             if len(values) != 1:
                 raise ValueError("Current SORRY-Bench metadata must contain each category description list once")
-            descriptions = values[0]
+            try:
+                descriptions = ast.literal_eval(values[0].value)
+            except (ValueError, TypeError):
+                raise ValueError(
+                    f"Current SORRY-Bench {name} must be a literal list"
+                ) from None
             if (
                 not isinstance(descriptions, list)
                 or len(descriptions) != 45
@@ -908,12 +881,65 @@ def _literal_category_mapping_with_schema(source: str) -> tuple[dict[str, str], 
             **{str(category): SORRY_DOMAINS[3] for category in range(41, 46)},
         }, True
 
-    if len(legacy_candidates) != 1:
+    if not has_legacy_schema:
         raise ValueError("Could not find one literal SORRY-Bench category/domain mapping")
-    mapping = legacy_candidates[0]
-    if set(mapping.values()) != expected_domains:
+    try:
+        mapping = ast.literal_eval(legacy_assignments[0].value)
+    except (ValueError, TypeError):
+        raise ValueError("Could not find one literal SORRY-Bench category/domain mapping") from None
+    if (
+        not isinstance(mapping, dict)
+        or not mapping
+        or not all(isinstance(key, str) and key.strip() and isinstance(value, str) for key, value in mapping.items())
+        or set(mapping.values()) != expected_domains
+    ):
         raise ValueError("Legacy SORRY-Bench category/domain mapping must cover all SORRY domains")
-    return mapping, False
+    return {str(key): str(value) for key, value in mapping.items()}, False
+
+
+def _authoritative_sorry_metadata_assignments(
+    tree: ast.Module,
+) -> dict[str, list[ast.Assign | ast.AnnAssign]]:
+    assignments: dict[str, list[ast.Assign | ast.AnnAssign]] = {
+        name: [] for name in _AUTHORITATIVE_SORRY_METADATA_NAMES
+    }
+    allowed_target_ids: set[int] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            target = node.targets[0]
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            target = node.target
+        else:
+            continue
+        if target.id in _AUTHORITATIVE_SORRY_METADATA_NAMES:
+            assignments[target.id].append(node)
+            allowed_target_ids.add(id(target))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in _AUTHORITATIVE_SORRY_METADATA_NAMES:
+            if id(node) not in allowed_target_ids:
+                raise ValueError("Authoritative SORRY-Bench metadata names may only have one top-level assignment")
+        elif isinstance(node, ast.arg) and node.arg in _AUTHORITATIVE_SORRY_METADATA_NAMES:
+            raise ValueError("Authoritative SORRY-Bench metadata names may not be function parameters")
+        elif isinstance(node, ast.alias):
+            bound_name = node.asname or node.name.split(".", 1)[0]
+            if bound_name in _AUTHORITATIVE_SORRY_METADATA_NAMES:
+                raise ValueError("Authoritative SORRY-Bench metadata names may not be imported")
+        elif isinstance(node, ast.ExceptHandler) and node.name in _AUTHORITATIVE_SORRY_METADATA_NAMES:
+            raise ValueError("Authoritative SORRY-Bench metadata names may not be exception targets")
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name in _AUTHORITATIVE_SORRY_METADATA_NAMES:
+                raise ValueError("Authoritative SORRY-Bench metadata names may not be rebound")
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            if any(name in _AUTHORITATIVE_SORRY_METADATA_NAMES for name in node.names):
+                raise ValueError("Authoritative SORRY-Bench metadata names may not be rebound")
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name in _AUTHORITATIVE_SORRY_METADATA_NAMES:
+            raise ValueError("Authoritative SORRY-Bench metadata names may not be pattern targets")
+
+    for name, values in assignments.items():
+        if len(values) > 1:
+            raise ValueError(f"Authoritative SORRY-Bench metadata name {name} must be assigned exactly once")
+    return assignments
 
 
 def _canonical_current_sorry_category(raw_category: object) -> str:

@@ -927,6 +927,47 @@ def test_literal_meta_mapping_requires_legacy_dict_to_cover_every_domain() -> No
         _literal_category_mapping(_legacy_sorry_meta_source(domains=SORRY_DOMAINS[:-1]))
 
 
+def test_literal_meta_mapping_recognizes_only_category_to_domain_as_legacy_authority() -> None:
+    from experiments.run_steering_calibration import _literal_category_mapping
+
+    with pytest.raises(ValueError, match="CATEGORY_TO_DOMAIN|literal SORRY-Bench"):
+        _literal_category_mapping(_legacy_sorry_meta_source().replace("CATEGORY_TO_DOMAIN", "OTHER_MAPPING"))
+
+
+@pytest.mark.parametrize("mutation", [
+    "category_descriptions += []",
+    "for category_descriptions in ():\n    pass",
+    "del category_descriptions",
+    "if (category_descriptions := []):\n    pass",
+    "def rebind():\n    category_descriptions = []",
+])
+def test_literal_meta_mapping_rejects_current_authority_mutations_anywhere(mutation: str) -> None:
+    from experiments.run_steering_calibration import _literal_category_mapping
+
+    with pytest.raises(ValueError, match="authoritative|metadata|category_descriptions"):
+        _literal_category_mapping(_current_sorry_meta_source() + "\n" + mutation)
+
+
+@pytest.mark.parametrize("extra_legacy_binding", [
+    "CATEGORY_TO_DOMAIN = build_mapping()",
+    "CATEGORY_TO_DOMAIN = {'category': 'not-a-sorry-domain'}",
+])
+def test_literal_meta_mapping_rejects_current_schema_with_any_legacy_binding(
+    extra_legacy_binding: str,
+) -> None:
+    from experiments.run_steering_calibration import _literal_category_mapping
+
+    with pytest.raises(ValueError, match="exactly one schema|authoritative|CATEGORY_TO_DOMAIN"):
+        _literal_category_mapping(_current_sorry_meta_source() + "\n" + extra_legacy_binding)
+
+
+def test_literal_meta_mapping_rejects_nonliteral_duplicate_legacy_authority() -> None:
+    from experiments.run_steering_calibration import _literal_category_mapping
+
+    with pytest.raises(ValueError, match="authoritative|CATEGORY_TO_DOMAIN"):
+        _literal_category_mapping(_legacy_sorry_meta_source() + "CATEGORY_TO_DOMAIN = build_mapping()\n")
+
+
 @pytest.mark.parametrize("raw_category", [True, 1.0, "01", "0", 46])
 def test_sorry_download_rejects_noncanonical_current_schema_categories(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raw_category: object,
