@@ -968,6 +968,13 @@ def test_literal_meta_mapping_rejects_nonliteral_duplicate_legacy_authority() ->
         _literal_category_mapping(_legacy_sorry_meta_source() + "CATEGORY_TO_DOMAIN = build_mapping()\n")
 
 
+def test_literal_meta_mapping_rejects_match_mapping_rest_authority_rebinding() -> None:
+    from experiments.run_steering_calibration import _literal_category_mapping
+
+    with pytest.raises(ValueError, match="authoritative|metadata|category_descriptions"):
+        _literal_category_mapping(_current_sorry_meta_source() + "\nmatch {}:\n    case {**category_descriptions}:\n        pass")
+
+
 @pytest.mark.parametrize("raw_category", [True, 1.0, "01", "0", 46])
 def test_sorry_download_rejects_noncanonical_current_schema_categories(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raw_category: object,

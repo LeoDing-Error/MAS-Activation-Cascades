@@ -935,6 +935,8 @@ def _authoritative_sorry_metadata_assignments(
                 raise ValueError("Authoritative SORRY-Bench metadata names may not be rebound")
         elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name in _AUTHORITATIVE_SORRY_METADATA_NAMES:
             raise ValueError("Authoritative SORRY-Bench metadata names may not be pattern targets")
+        elif isinstance(node, ast.MatchMapping) and node.rest in _AUTHORITATIVE_SORRY_METADATA_NAMES:
+            raise ValueError("Authoritative SORRY-Bench metadata names may not be pattern targets")
 
     for name, values in assignments.items():
         if len(values) > 1:
