@@ -128,21 +128,8 @@ def prepare_calibration(
         "xstest_commit": XSTEST_COMMIT,
         "xstest_attribution": "XSTest by Rottger et al., CC-BY-4.0",
         "repository_commit": _repository_commit(),
-        "selection_parameters": {
-            "excluded_category_terms": list(EXCLUDED_CATEGORY_TERMS),
-            "overlap_threshold": OVERLAP_THRESHOLD,
-            "sorry_domains": list(SORRY_DOMAINS),
-            "xstest_ids": ["1", "26"],
-        },
-        "generation_parameters": {
-            "model": PRIMARY_MODEL,
-            "alphas": list(ALPHAS),
-            "system_prompt": SYSTEM_PROMPT,
-            "max_new_tokens": MAX_NEW_TOKENS,
-            "do_sample": False,
-            "temperature": 0.0,
-            "top_p": 1.0,
-        },
+        "selection_parameters": _selection_parameters(),
+        "generation_parameters": _generation_parameters(),
     }
     _write_json(output_dir / "private_prompt_manifest.json", private_manifest)
     _write_json(output_dir / "run_manifest.json", public_manifest)
@@ -242,8 +229,8 @@ def _validate_resume_records(
             if not isinstance(record.get("response_text"), str):
                 raise ValueError("response_text must be a string")
             completion = record.get("completion_token_count")
-            if type(completion) is not int or completion < 0:
-                raise ValueError("completion_token_count must be a non-negative integer")
+            if type(completion) is not int or completion < 0 or completion > MAX_NEW_TOKENS:
+                raise ValueError(f"completion_token_count must be an integer in 0..{MAX_NEW_TOKENS}")
             if type(record.get("truncated")) is not bool or record["truncated"] != (completion == MAX_NEW_TOKENS):
                 raise ValueError("truncated does not match completion_token_count")
             expected_termination = "length" if completion == MAX_NEW_TOKENS else "stop"
@@ -288,37 +275,77 @@ def _generation_parameters() -> dict[str, object]:
     }
 
 
+def _selection_parameters() -> dict[str, object]:
+    return {
+        "excluded_category_terms": list(EXCLUDED_CATEGORY_TERMS),
+        "overlap_threshold": OVERLAP_THRESHOLD,
+        "sorry_domains": list(SORRY_DOMAINS),
+        "xstest_ids": ["1", "26"],
+    }
+
+
+def _private_manifest_provenance(
+    manifest: Mapping[str, object], prompts: Sequence[CalibrationPrompt],
+) -> dict[str, str]:
+    sorry_revision = _required_string(manifest, "sorry_revision", context="Private prompt manifest")
+    xstest_commit = _required_string(manifest, "xstest_commit", context="Private prompt manifest")
+    if xstest_commit != XSTEST_COMMIT:
+        raise ValueError("Private prompt manifest xstest_commit does not match the pinned commit")
+    for prompt in prompts:
+        if prompt.prompt_id.startswith("sorry-"):
+            if prompt.source != "sorry_bench_202503":
+                raise ValueError("Private SORRY-Bench prompt source is invalid")
+        elif prompt.source != f"xstest@{xstest_commit}":
+            raise ValueError("Private XSTest prompt source does not match xstest_commit")
+    return {"sorry_revision": sorry_revision, "xstest_commit": xstest_commit}
+
+
 def _record_artifact_provenance(
-    *, output_dir: Path, prompts: Sequence[CalibrationPrompt], artifact_sha256: str,
+    *, output_dir: Path, prompts: Sequence[CalibrationPrompt], private_provenance: Mapping[str, str], artifact_sha256: str,
     artifact: SteeringVectorArtifact,
 ) -> dict[str, object]:
     """Validate public run provenance, then persist the artifact before model loading."""
     manifest_path = output_dir / "run_manifest.json"
     expected_prompts = [_prompt_dict(prompt, include_text=False) for prompt in prompts]
+    required_base = {
+        "prompts": expected_prompts,
+        "sorry_revision": private_provenance["sorry_revision"],
+        "xstest_commit": private_provenance["xstest_commit"],
+        "xstest_attribution": "XSTest by Rottger et al., CC-BY-4.0",
+        "selection_parameters": _selection_parameters(),
+        "generation_parameters": _generation_parameters(),
+    }
     if manifest_path.exists():
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             raise ValueError("Run manifest must be an object")
-        if "prompts" in payload and payload["prompts"] != expected_prompts:
-            raise ValueError("Run manifest prompts do not match the private manifest")
-        parameters = payload.get("generation_parameters")
-        if parameters is not None:
-            if not isinstance(parameters, Mapping) or any(
-                parameters.get(key) != value for key, value in _generation_parameters().items()
-            ):
-                raise ValueError("Run manifest generation parameters do not match this run")
+        for key, value in required_base.items():
+            if key not in payload:
+                raise ValueError(f"Run manifest {key} is required")
+            if payload[key] != value:
+                raise ValueError(f"Run manifest {key} does not match the private manifest or this run")
+        if "repository_commit" not in payload:
+            raise ValueError("Run manifest repository_commit is required")
+        repository_commit = payload["repository_commit"]
+        if repository_commit is not None and (not isinstance(repository_commit, str) or not repository_commit):
+            raise ValueError("Run manifest repository_commit must be a non-empty string or null")
     else:
         payload = {
-            "prompts": expected_prompts,
+            **required_base,
             "repository_commit": _repository_commit(),
-            "generation_parameters": _generation_parameters(),
         }
-    for key, value in {
+    artifact_fields = {
         "artifact_sha256": artifact_sha256,
         "artifact_model": artifact.model_name,
         "artifact_layer": artifact.layer,
         "artifact_vector_norm": artifact.vector_norm,
-    }.items():
+    }
+    existing_artifact_fields = {key for key in artifact_fields if key in payload}
+    if existing_artifact_fields and existing_artifact_fields != set(artifact_fields):
+        raise ValueError("Run manifest artifact provenance fields must be complete")
+    if existing_artifact_fields and not isinstance(payload.get("dtype"), str):
+        raise ValueError("Run manifest dtype is required after artifact provenance is recorded")
+    for key, value in artifact_fields.items():
         if key in payload and payload[key] != value:
             raise ValueError(f"Run manifest {key} does not match this run")
         payload[key] = value
@@ -336,13 +363,15 @@ def generate_calibration(
     """Generate the complete grid with one model instance and JSONL checkpointing."""
     _ensure_private_output_dir(output_dir)
     prompts = _manifest_prompts(private_manifest)
+    private_provenance = _private_manifest_provenance(private_manifest, prompts)
     artifact_sha256 = _sha256_file(steering_path)
     artifact = SteeringVectorArtifact.from_file(steering_path)
     if artifact.model_name != PRIMARY_MODEL or artifact.layer != 25:
         raise ValueError("Calibration artifact must match Llama 3.1 8B layer 25")
 
     run_manifest = _record_artifact_provenance(
-        output_dir=output_dir, prompts=prompts, artifact_sha256=artifact_sha256, artifact=artifact,
+        output_dir=output_dir, prompts=prompts, private_provenance=private_provenance,
+        artifact_sha256=artifact_sha256, artifact=artifact,
     )
     records_path = output_dir / "raw_generations.jsonl"
     existing = _validate_resume_records(

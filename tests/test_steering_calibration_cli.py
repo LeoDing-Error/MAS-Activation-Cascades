@@ -4,6 +4,7 @@ import json
 import hashlib
 import csv
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,8 @@ def make_private_manifest() -> dict[str, object]:
         *select_xstest_pair(make_xstest_rows()),
     ]
     return {
+        "sorry_revision": "sorry-sha",
+        "xstest_commit": "d7bb5bd738c1fcbc36edd83d5e7d1b71a3e2d84d",
         "prompts": [
             {
                 "prompt_id": prompt.prompt_id,
@@ -390,3 +393,148 @@ def test_literal_meta_mapping_refuses_nonliteral_code_and_gated_access_has_guida
     monkeypatch.setitem(sys.modules, "huggingface_hub", FakeHubModule)
     with pytest.raises(RuntimeError, match="Accept the sorry-bench/sorry-bench-202503 license.*HF_TOKEN"):
         _download_sorry_records()
+
+
+def test_sorry_download_uses_resolved_revision_for_both_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from experiments.run_steering_calibration import _download_sorry_records
+
+    question_path = tmp_path / "question.jsonl"
+    question_path.write_text("\n".join(
+        json.dumps({"question_id": index, "category": f"category-{index}", "turns": [f"prompt {index}"]})
+        for index in range(1, 5)
+    ), encoding="utf-8")
+    meta_path = tmp_path / "meta_info.py"
+    meta_path.write_text(
+        "CATEGORY_TO_DOMAIN = {\n"
+        + ",\n".join(f"    'category-{index}': '{domain}'" for index, domain in enumerate(SORRY_DOMAINS, start=1))
+        + "\n}\n",
+        encoding="utf-8",
+    )
+    downloads: list[dict[str, object]] = []
+
+    class FakeApi:
+        def dataset_info(self, repo_id: str) -> SimpleNamespace:
+            assert repo_id == "sorry-bench/sorry-bench-202503"
+            return SimpleNamespace(sha="resolved-sha")
+
+    def fake_download(repo_id: str, **kwargs: object) -> str:
+        assert repo_id == "sorry-bench/sorry-bench-202503"
+        downloads.append(kwargs)
+        return str(question_path if kwargs["filename"] == "question.jsonl" else meta_path)
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=FakeApi, hf_hub_download=fake_download))
+    records, revision = _download_sorry_records()
+    assert revision == "resolved-sha"
+    assert [call["filename"] for call in downloads] == ["question.jsonl", "meta_info.py"]
+    assert all(call["revision"] == "resolved-sha" and call["repo_type"] == "dataset" for call in downloads)
+    assert [record["high_level_domain"] for record in records] == list(SORRY_DOMAINS)
+
+
+def test_generate_requires_complete_matching_public_manifest(tmp_path: Path) -> None:
+    from experiments.run_steering_calibration import generate_calibration, prepare_calibration
+
+    outputs = prepare_calibration(
+        sorry_records=make_sorry_records(), sorry_revision="sorry-sha", xstest_rows=make_xstest_rows(),
+        ta2_instructions=[], output_dir=tmp_path,
+    )
+    public = json.loads((tmp_path / "run_manifest.json").read_text(encoding="utf-8"))
+    del public["prompts"]
+    (tmp_path / "run_manifest.json").write_text(json.dumps(public), encoding="utf-8")
+    artifact_path = tmp_path / "vector.pt"
+    write_artifact(artifact_path)
+    with pytest.raises(ValueError, match="Run manifest prompts"):
+        generate_calibration(
+            private_manifest=outputs.private_manifest, steering_path=artifact_path,
+            output_dir=tmp_path, backend_factory=FakeBackendFactory(),
+        )
+
+
+def test_generate_rejects_public_private_revision_mismatch(tmp_path: Path) -> None:
+    from experiments.run_steering_calibration import generate_calibration, prepare_calibration
+
+    outputs = prepare_calibration(
+        sorry_records=make_sorry_records(), sorry_revision="sorry-sha", xstest_rows=make_xstest_rows(),
+        ta2_instructions=[], output_dir=tmp_path,
+    )
+    public = json.loads((tmp_path / "run_manifest.json").read_text(encoding="utf-8"))
+    public["sorry_revision"] = "different-sha"
+    (tmp_path / "run_manifest.json").write_text(json.dumps(public), encoding="utf-8")
+    artifact_path = tmp_path / "vector.pt"
+    write_artifact(artifact_path)
+    with pytest.raises(ValueError, match="sorry_revision"):
+        generate_calibration(
+            private_manifest=outputs.private_manifest, steering_path=artifact_path,
+            output_dir=tmp_path, backend_factory=FakeBackendFactory(),
+        )
+
+
+def test_generate_rejects_mismatched_public_generation_parameters(tmp_path: Path) -> None:
+    from experiments.run_steering_calibration import generate_calibration, prepare_calibration
+
+    outputs = prepare_calibration(
+        sorry_records=make_sorry_records(), sorry_revision="sorry-sha", xstest_rows=make_xstest_rows(),
+        ta2_instructions=[], output_dir=tmp_path,
+    )
+    public = json.loads((tmp_path / "run_manifest.json").read_text(encoding="utf-8"))
+    public["generation_parameters"]["top_p"] = 0.9
+    (tmp_path / "run_manifest.json").write_text(json.dumps(public), encoding="utf-8")
+    artifact_path = tmp_path / "vector.pt"
+    write_artifact(artifact_path)
+    with pytest.raises(ValueError, match="generation_parameters"):
+        generate_calibration(
+            private_manifest=outputs.private_manifest, steering_path=artifact_path,
+            output_dir=tmp_path, backend_factory=FakeBackendFactory(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("alpha", 0.9, "calibration alpha"),
+        ("model", "wrong-model", "model or artifact_sha256"),
+        ("temperature", 0.5, "decoding parameters"),
+        ("completion_token_count", 257, "completion_token_count"),
+    ],
+)
+def test_generate_rejects_invalid_resume_provenance(
+    tmp_path: Path, field: str, value: object, match: str,
+) -> None:
+    from experiments.run_steering_calibration import generate_calibration
+
+    artifact_path = tmp_path / "vector.pt"
+    write_artifact(artifact_path)
+    records_path = tmp_path / "raw_generations.jsonl"
+    write_existing_record(records_path, prompt_id="sorry-1", alpha=0.0, steering_path=artifact_path)
+    record = read_jsonl(records_path)[0]
+    record[field] = value
+    if field == "completion_token_count":
+        record["truncated"] = False
+        record["termination_state"] = "stop"
+    records_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=match):
+        generate_calibration(
+            private_manifest=make_private_manifest(), steering_path=artifact_path,
+            output_dir=tmp_path, backend_factory=FakeBackendFactory(),
+        )
+
+
+def test_generate_raises_when_final_jsonl_is_incomplete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import experiments.run_steering_calibration as runner
+
+    artifact_path = tmp_path / "vector.pt"
+    write_artifact(artifact_path)
+    real_append = runner._append_jsonl
+    calls = 0
+
+    def drop_one(path: Path, record: dict[str, object]) -> None:
+        nonlocal calls
+        calls += 1
+        if calls != 1:
+            real_append(path, record)
+
+    monkeypatch.setattr(runner, "_append_jsonl", drop_one)
+    with pytest.raises(ValueError, match="complete 36-record"):
+        runner.generate_calibration(
+            private_manifest=make_private_manifest(), steering_path=artifact_path,
+            output_dir=tmp_path, backend_factory=FakeBackendFactory(),
+        )
