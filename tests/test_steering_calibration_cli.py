@@ -4,15 +4,64 @@ import json
 import hashlib
 import csv
 import sys
-from types import SimpleNamespace
+from dataclasses import dataclass
+from types import ModuleType, SimpleNamespace
 from pathlib import Path
 
 import pytest
-import torch
 
-from src.backends.steering_backend import GenerationResult
 from src.experiments.calibration_protocol import ALPHAS, SORRY_DOMAINS, select_sorry_prompts, select_xstest_pair
 from src.experiments.phase1_config import PRIMARY_MODEL
+
+
+@dataclass
+class FakeGenerationResult:
+    prompt_text: str
+    response_text: str
+    prompt_token_count: int
+    completion_token_count: int
+    generated_token_ids: list[int]
+    step_logits: object | None
+
+
+@dataclass(frozen=True)
+class FakeSteeringVectorArtifact:
+    model_name: str
+    layer: int
+    vector_norm: float
+
+    @classmethod
+    def from_file(cls, path: Path) -> "FakeSteeringVectorArtifact":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return cls(
+            model_name=payload["model_name"],
+            layer=payload["selected_layer"],
+            vector_norm=payload.get("vector_norm", 2.0),
+        )
+
+
+@pytest.fixture(autouse=True)
+def _provide_local_backend_shapes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep CLI tests independent of collection-time backend and torch fakes."""
+    backend_package = ModuleType("src.backends")
+    backend_package.__path__ = []
+    backend_module = ModuleType("src.backends.steering_backend")
+    backend_module.GenerationResult = FakeGenerationResult
+    backend_module.SteeringModelBackend = object
+    backend_module.SteeringVectorArtifact = FakeSteeringVectorArtifact
+    backend_package.steering_backend = backend_module
+    metrics_package = ModuleType("src.metrics")
+    metrics_package.__path__ = []
+    uncertainty_module = ModuleType("src.metrics.uncertainty")
+    uncertainty_module.compute_uncertainty_snapshot = lambda *_args, **_kwargs: SimpleNamespace(
+        mean_token_entropy=None, normalized_sequence_msp=None,
+    )
+    metrics_package.uncertainty = uncertainty_module
+    monkeypatch.setitem(sys.modules, "src.backends", backend_package)
+    monkeypatch.setitem(sys.modules, "src.backends.steering_backend", backend_module)
+    monkeypatch.setitem(sys.modules, "src.metrics", metrics_package)
+    monkeypatch.setitem(sys.modules, "src.metrics.uncertainty", uncertainty_module)
+    sys.modules.pop("experiments.run_steering_calibration", None)
 
 
 def make_sorry_records() -> list[dict[str, str]]:
@@ -97,14 +146,7 @@ def write_existing_record(path: Path, *, prompt_id: str, alpha: float, steering_
 
 
 def write_artifact(path: Path) -> None:
-    torch.save(
-        {
-            "model_name": PRIMARY_MODEL,
-            "selected_layer": 25,
-            "vector": torch.ones(4),
-        },
-        path,
-    )
+    path.write_text(json.dumps({"model_name": PRIMARY_MODEL, "selected_layer": 25}), encoding="utf-8")
 
 
 class FakeBackend:
@@ -119,9 +161,9 @@ class FakeBackend:
     def set_steering_enabled(self, enabled: bool) -> None:
         self.enabled.append(enabled)
 
-    def generate_from_messages(self, messages: list[dict[str, str]]) -> GenerationResult:
+    def generate_from_messages(self, messages: list[dict[str, str]]) -> FakeGenerationResult:
         self.messages.append(messages)
-        return GenerationResult(
+        return FakeGenerationResult(
             prompt_text=messages[-1]["content"],
             response_text=f"response to {messages[-1]['content']}",
             prompt_token_count=2,
@@ -265,7 +307,7 @@ def test_artifact_rejection_happens_before_factory_construction(tmp_path: Path) 
     from experiments.run_steering_calibration import generate_calibration
 
     artifact_path = tmp_path / "wrong.pt"
-    torch.save({"model_name": "wrong", "selected_layer": 25, "vector": torch.ones(4)}, artifact_path)
+    artifact_path.write_text(json.dumps({"model_name": "wrong", "selected_layer": 25}), encoding="utf-8")
     factory = FakeBackendFactory()
     with pytest.raises(ValueError, match="Llama 3.1 8B layer 25"):
         generate_calibration(
