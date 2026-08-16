@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import hashlib
 import csv
+import importlib
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass
 from types import ModuleType, SimpleNamespace
 from pathlib import Path
@@ -46,8 +48,8 @@ class FakeSteeringVectorArtifact:
         )
 
 
-@pytest.fixture(autouse=True)
-def _provide_local_backend_shapes() -> None:
+@contextmanager
+def _local_backend_shapes():
     """Keep CLI tests independent of collection-time backend and torch fakes."""
     module_names = (
         "src.backends",
@@ -58,6 +60,13 @@ def _provide_local_backend_shapes() -> None:
     )
     missing = object()
     previous = {name: sys.modules.get(name, missing) for name in module_names}
+    previous_attributes = {}
+    for name in module_names:
+        parent_name, attribute = name.rsplit(".", 1)
+        parent = sys.modules.get(parent_name)
+        previous_attributes[(parent_name, attribute)] = (
+            getattr(parent, attribute, missing) if parent is not None else missing
+        )
     backend_package = ModuleType("src.backends")
     backend_package.__path__ = []
     backend_module = ModuleType("src.backends.steering_backend")
@@ -77,6 +86,15 @@ def _provide_local_backend_shapes() -> None:
     sys.modules["src.metrics"] = metrics_package
     sys.modules["src.metrics.uncertainty"] = uncertainty_module
     sys.modules.pop("experiments.run_steering_calibration", None)
+    for name in module_names:
+        parent_name, attribute = name.rsplit(".", 1)
+        parent = sys.modules.get(parent_name)
+        module = sys.modules.get(name)
+        if parent is not None:
+            if module is None:
+                vars(parent).pop(attribute, None)
+            else:
+                setattr(parent, attribute, module)
     try:
         yield
     finally:
@@ -85,6 +103,51 @@ def _provide_local_backend_shapes() -> None:
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = module
+        for (parent_name, attribute), value in previous_attributes.items():
+            parent = sys.modules.get(parent_name)
+            if parent is None:
+                continue
+            if value is missing:
+                vars(parent).pop(attribute, None)
+            else:
+                setattr(parent, attribute, value)
+
+
+@pytest.fixture(autouse=True)
+def _provide_local_backend_shapes() -> None:
+    with _local_backend_shapes():
+        yield
+
+
+def test_local_backend_shape_context_restores_modules_and_parent_attributes() -> None:
+    tracked_names = (
+        "src.backends",
+        "src.backends.steering_backend",
+        "src.metrics",
+        "src.metrics.uncertainty",
+        "experiments.run_steering_calibration",
+    )
+    experiments_package = importlib.import_module("experiments")
+    sys.modules.pop("experiments.run_steering_calibration", None)
+    vars(experiments_package).pop("run_steering_calibration", None)
+    missing = object()
+    before_modules = {name: sys.modules.get(name, missing) for name in tracked_names}
+    before_attributes = {}
+    for name in tracked_names:
+        parent_name, attribute = name.rsplit(".", 1)
+        parent = sys.modules.get(parent_name)
+        before_attributes[(parent_name, attribute)] = (
+            getattr(parent, attribute, missing) if parent is not None else missing
+        )
+
+    with _local_backend_shapes():
+        importlib.import_module("experiments.run_steering_calibration")
+
+    for name, module in before_modules.items():
+        assert sys.modules.get(name, missing) is module
+    for (parent_name, attribute), value in before_attributes.items():
+        parent = sys.modules.get(parent_name)
+        assert (getattr(parent, attribute, missing) if parent is not None else missing) is value
 
 
 def make_sorry_records() -> list[dict[str, str]]:
@@ -527,8 +590,35 @@ def test_generate_quarantines_only_an_unterminated_final_jsonl_fragment(tmp_path
     )
 
     assert records_path.read_bytes() == complete_bytes
-    assert (tmp_path / "raw_generations.jsonl.unterminated-tail").read_bytes() == b'{"prompt_id":"interrupted"'
+    quarantined = list(tmp_path.glob("raw_generations.jsonl.unterminated-tail*"))
+    assert [path.read_bytes() for path in quarantined] == [b'{"prompt_id":"interrupted"']
     assert len(read_jsonl(records_path)) == 36
+
+
+def test_generate_preserves_two_successive_distinct_unterminated_final_fragments(
+    tmp_path: Path,
+) -> None:
+    from experiments.run_steering_calibration import generate_calibration
+
+    _generate_complete_records(tmp_path)
+    records_path = tmp_path / "raw_generations.jsonl"
+    complete_bytes = records_path.read_bytes()
+    artifact_path = tmp_path / "vector.pt"
+    tails = (b'{"prompt_id":"first-interruption"', b'{"prompt_id":"second-interruption"')
+
+    for tail in tails:
+        records_path.write_bytes(complete_bytes + tail)
+        generate_calibration(
+            private_manifest=make_private_manifest(tmp_path),
+            steering_path=artifact_path,
+            output_dir=tmp_path,
+            backend_factory=FakeBackendFactory(),
+        )
+        assert records_path.read_bytes() == complete_bytes
+
+    quarantined = list(tmp_path.glob("raw_generations.jsonl.unterminated-tail*"))
+    assert len(quarantined) == 2
+    assert {path.read_bytes() for path in quarantined} == set(tails)
 
 
 def test_generate_rejects_a_malformed_completed_jsonl_record(tmp_path: Path) -> None:

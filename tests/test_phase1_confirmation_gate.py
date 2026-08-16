@@ -6,10 +6,17 @@ from pathlib import Path
 
 import pytest
 
+from src.experiments.calibration_protocol import ALPHAS
 from src.experiments.phase1_gate import load_held_out_confirmation
 
 
-def _write_confirmation(path: Path, artifact_path: Path, *, passed: bool = True) -> dict[str, object]:
+def _write_confirmation(
+    path: Path,
+    artifact_path: Path,
+    *,
+    passed: bool = True,
+    selected_alpha: float = 0.2,
+) -> dict[str, object]:
     payload: dict[str, object] = {
         "schema_version": 1,
         "kind": "phase1_held_out_confirmation",
@@ -17,26 +24,34 @@ def _write_confirmation(path: Path, artifact_path: Path, *, passed: bool = True)
         "calibration_run_id": "a" * 64,
         "held_out_run_id": "b" * 64,
         "artifact_sha256": hashlib.sha256(artifact_path.read_bytes()).hexdigest(),
-        "selected_alpha": 0.2,
+        "selected_alpha": selected_alpha,
     }
     path.write_text(json.dumps(payload), encoding="utf-8")
     return payload
 
 
-def test_held_out_confirmation_binds_phase1_to_artifact_and_selected_alpha(tmp_path: Path) -> None:
+@pytest.mark.parametrize("selected_alpha", ALPHAS[1:])
+def test_held_out_confirmation_binds_phase1_to_artifact_and_selected_alpha(
+    tmp_path: Path, selected_alpha: float,
+) -> None:
     artifact_path = tmp_path / "vector.pt"
     artifact_path.write_bytes(b"artifact")
     confirmation_path = tmp_path / "held_out_confirmation.json"
-    payload = _write_confirmation(confirmation_path, artifact_path)
+    payload = _write_confirmation(
+        confirmation_path,
+        artifact_path,
+        selected_alpha=selected_alpha,
+    )
 
     confirmation = load_held_out_confirmation(
         confirmation_path,
         steering_vector_path=artifact_path,
-        steering_strength=0.2,
+        steering_strength=selected_alpha,
     )
 
     assert confirmation.calibration_run_id == payload["calibration_run_id"]
     assert confirmation.held_out_run_id == payload["held_out_run_id"]
+    assert confirmation.selected_alpha == selected_alpha
 
 
 @pytest.mark.parametrize(
@@ -82,6 +97,58 @@ def test_held_out_confirmation_requires_immutable_run_identifiers(tmp_path: Path
             steering_vector_path=artifact_path,
             steering_strength=0.2,
         )
+
+
+@pytest.mark.parametrize("selected_alpha", [float("nan"), float("inf"), float("-inf"), 0.0, -0.1, 1.0, 0.15])
+def test_held_out_confirmation_rejects_non_candidate_alphas(
+    tmp_path: Path, selected_alpha: float,
+) -> None:
+    artifact_path = tmp_path / "vector.pt"
+    artifact_path.write_bytes(b"artifact")
+    confirmation_path = tmp_path / "held_out_confirmation.json"
+    _write_confirmation(
+        confirmation_path,
+        artifact_path,
+        selected_alpha=selected_alpha,
+    )
+
+    with pytest.raises(ValueError, match="finite positive calibration candidate alpha"):
+        load_held_out_confirmation(
+            confirmation_path,
+            steering_vector_path=artifact_path,
+            steering_strength=selected_alpha,
+        )
+
+
+@pytest.mark.parametrize("selected_alpha", [float("nan"), float("inf"), 0.15])
+def test_phase1_cli_rejects_non_candidate_confirmation_alphas_before_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    selected_alpha: float,
+) -> None:
+    from experiments import run_phase1
+
+    artifact_path = tmp_path / "vector.pt"
+    artifact_path.write_bytes(b"artifact")
+    confirmation_path = tmp_path / "held_out_confirmation.json"
+    _write_confirmation(
+        confirmation_path,
+        artifact_path,
+        selected_alpha=selected_alpha,
+    )
+    monkeypatch.setattr(run_phase1, "run_experiment_1_2", lambda _args: None)
+
+    with pytest.raises(ValueError, match="finite positive calibration candidate alpha"):
+        run_phase1.main([
+            "--experiment", "1.2",
+            "--steering-vector", str(artifact_path),
+            "--steering-strength", str(selected_alpha),
+            "--held-out-confirmation", str(confirmation_path),
+            "--clean-api-base", "http://127.0.0.1:8000/v1",
+            "--results-dir", str(tmp_path / "results"),
+        ])
+
+    assert not (tmp_path / "results").exists()
 
 
 @pytest.mark.parametrize("experiment", ["1.1", "1.2", "1.3", "1.4"])

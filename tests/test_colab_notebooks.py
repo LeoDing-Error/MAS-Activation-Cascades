@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 COLAB_BRANCH = "main"
@@ -43,9 +45,33 @@ def _generate_to(generator: Path, output: Path) -> None:
             check=True,
         )
     finally:
+        changed = []
         for path, content in before.items():
-            if path.read_bytes() != content:
+            if not path.exists() or path.read_bytes() != content:
+                changed.append(path.name)
                 path.write_bytes(content)
+        assert not changed, (
+            "Notebook generator modified tracked notebook artifact(s): "
+            + ", ".join(changed)
+        )
+
+
+def test_generate_to_reports_tracked_notebook_side_effect_after_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tracked = NOTEBOOKS[0]
+    before = tracked.read_bytes()
+
+    def mutate_tracked_notebook(*_args: object, **_kwargs: object) -> None:
+        tracked.write_bytes(b"generator side effect")
+
+    monkeypatch.setattr(subprocess, "run", mutate_tracked_notebook)
+
+    with pytest.raises(AssertionError, match="modified tracked notebook"):
+        _generate_to(GENERATORS[0], tmp_path / "generated.ipynb")
+
+    assert tracked.read_bytes() == before
 
 
 def test_colab_notebooks_clone_the_colab_workflow_branch() -> None:

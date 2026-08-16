@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 import sys
 import unittest
 from pathlib import Path
+
+import pytest
 
 from src.experiments.phase1_config import EvalTask, select_tasks
 from src.experiments.sweep import SweepConfig, build_sweep_jobs
@@ -174,6 +178,37 @@ class Phase1SweepMultiGpuTests(unittest.TestCase):
             command[command.index("--held-out-confirmation") + 1],
             "results/held_out_confirmation.json",
         )
+
+
+@pytest.mark.parametrize("selected_alpha", [float("nan"), float("inf"), 0.15])
+def test_sweep_rejects_non_candidate_confirmation_alphas(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    selected_alpha: float,
+) -> None:
+    artifact_path = tmp_path / "vector.pt"
+    artifact_path.write_bytes(b"artifact")
+    confirmation_path = tmp_path / "held_out_confirmation.json"
+    confirmation_path.write_text(json.dumps({
+        "schema_version": 1,
+        "kind": "phase1_held_out_confirmation",
+        "held_out_confirmation_passed": True,
+        "calibration_run_id": "a" * 64,
+        "held_out_run_id": "b" * 64,
+        "artifact_sha256": hashlib.sha256(artifact_path.read_bytes()).hexdigest(),
+        "selected_alpha": selected_alpha,
+    }), encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", [
+        str(SWEEP_SCRIPT),
+        "--experiments", "1.2",
+        "--steering-vector", str(artifact_path),
+        "--held-out-confirmation", str(confirmation_path),
+        "--steering-strengths", str(selected_alpha),
+        "--dry-run",
+    ])
+
+    with pytest.raises(ValueError, match="finite positive calibration candidate alpha"):
+        run_phase1_sweep.main()
 
 
 if __name__ == "__main__":

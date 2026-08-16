@@ -51,9 +51,9 @@ TA2_INSTRUCTION_COUNT = 520
 PRIVATE_OUTPUT_FILENAMES = (
     "private_prompt_manifest.json",
     "raw_generations.jsonl",
-    "raw_generations.jsonl.unterminated-tail",
+    f"raw_generations.jsonl.unterminated-tail.{'0' * 64}",
     ".raw_generations.jsonl.repair.tmp",
-    ".raw_generations.jsonl.unterminated-tail.repair.tmp",
+    f".raw_generations.jsonl.unterminated-tail.{'0' * 64}.repair.tmp",
     "blind_scoring.csv",
     "condition_key.json",
     "manual_scores.csv",
@@ -357,11 +357,10 @@ def _recoverable_jsonl_lines(path: Path) -> list[str]:
             decoded_tail = tail.decode("utf-8")
             parsed_tail = json.loads(decoded_tail)
         except (UnicodeDecodeError, json.JSONDecodeError):
-            quarantine_path = Path(f"{path}.unterminated-tail")
+            tail_sha256 = hashlib.sha256(tail).hexdigest()
+            quarantine_path = Path(f"{path}.unterminated-tail.{tail_sha256}")
             if quarantine_path.exists() and quarantine_path.read_bytes() != tail:
-                raise ValueError(
-                    "A different unterminated JSONL tail is already quarantined"
-                )
+                raise ValueError("Unterminated JSONL tail quarantine digest collision")
             if not quarantine_path.exists():
                 _atomic_write_bytes(quarantine_path, tail)
             _atomic_write_bytes(path, prefix + separator if separator else b"")

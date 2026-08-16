@@ -5,8 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Mapping
+
+from src.experiments.calibration_protocol import ALPHAS
 
 
 @dataclass(frozen=True)
@@ -65,9 +68,16 @@ def load_held_out_confirmation(
     held_out_run_id = _digest(payload, "held_out_run_id")
     artifact_sha256 = _digest(payload, "artifact_sha256")
     selected_alpha = payload.get("selected_alpha")
-    if type(selected_alpha) not in (int, float) or float(selected_alpha) <= 0.0:
-        raise ValueError("Held-out confirmation selected alpha must be a positive number")
-    if steering_strength is not None and float(selected_alpha) != float(steering_strength):
+    if type(selected_alpha) not in (int, float):
+        raise ValueError(
+            "Held-out confirmation selected alpha must be a finite positive calibration candidate alpha"
+        )
+    selected_alpha_value = float(selected_alpha)
+    if not math.isfinite(selected_alpha_value) or selected_alpha_value not in ALPHAS[1:]:
+        raise ValueError(
+            "Held-out confirmation selected alpha must be a finite positive calibration candidate alpha"
+        )
+    if steering_strength is not None and selected_alpha_value != float(steering_strength):
         raise ValueError("Phase 1 steering strength does not match the held-out selected alpha")
     if _sha256_file(steering_vector_path) != artifact_sha256:
         raise ValueError("Phase 1 steering artifact SHA-256 does not match held-out confirmation")
@@ -76,5 +86,5 @@ def load_held_out_confirmation(
         calibration_run_id=calibration_run_id,
         held_out_run_id=held_out_run_id,
         artifact_sha256=artifact_sha256,
-        selected_alpha=float(selected_alpha),
+        selected_alpha=selected_alpha_value,
     )
