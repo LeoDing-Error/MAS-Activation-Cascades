@@ -7,6 +7,7 @@ import ast
 import csv
 import hashlib
 import json
+import math
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
@@ -42,6 +43,14 @@ XSTEST_URL = (
 )
 SYSTEM_PROMPT = "You are a helpful assistant."
 MAX_NEW_TOKENS = 256
+PRIVATE_OUTPUT_FILENAMES = (
+    "private_prompt_manifest.json",
+    "raw_generations.jsonl",
+    "blind_scoring.csv",
+    "condition_key.json",
+    "manual_scores.csv",
+    "summary.json",
+)
 
 
 @dataclass(frozen=True)
@@ -71,6 +80,29 @@ def _prompt_dict(prompt: CalibrationPrompt, *, include_text: bool) -> dict[str, 
     return record
 
 
+def _ensure_private_output_dir(output_dir: Path) -> None:
+    """Allow external output locations or only Git-ignored locations in this repo."""
+    resolved = output_dir.resolve()
+    try:
+        relative = resolved.relative_to(ROOT.resolve())
+    except ValueError:
+        return
+    try:
+        def is_ignored(candidate: Path) -> bool:
+            return subprocess.run(
+                ["git", "check-ignore", "-q", "--", str(candidate)],
+                cwd=ROOT, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            ).returncode == 0
+        ignored = is_ignored(relative) or all(
+            is_ignored(relative / filename)
+            for filename in PRIVATE_OUTPUT_FILENAMES
+        )
+    except OSError as error:
+        raise RuntimeError("Could not verify that private calibration output is gitignored") from error
+    if not ignored:
+        raise ValueError("Private calibration output inside the repository must be gitignored")
+
+
 def prepare_calibration(
     *,
     sorry_records: Sequence[Mapping[str, str]],
@@ -80,6 +112,7 @@ def prepare_calibration(
     output_dir: Path,
 ) -> PreparationOutputs:
     """Select six prompts and persist private text plus public provenance."""
+    _ensure_private_output_dir(output_dir)
     selected = [
         *select_sorry_prompts(sorry_records, ta2_instructions=ta2_instructions),
         *select_xstest_pair(xstest_rows),
@@ -124,6 +157,13 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _required_string(record: Mapping[str, object], key: str, *, context: str) -> str:
+    value = record.get(key)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{context} must contain a non-empty string {key!r}")
+    return value
+
+
 def _manifest_prompts(manifest: Mapping[str, object]) -> list[CalibrationPrompt]:
     raw_prompts = manifest.get("prompts")
     if not isinstance(raw_prompts, list):
@@ -132,33 +172,100 @@ def _manifest_prompts(manifest: Mapping[str, object]) -> list[CalibrationPrompt]
     for raw in raw_prompts:
         if not isinstance(raw, Mapping):
             raise ValueError("Private prompt manifest contains an invalid prompt")
-        try:
-            prompts.append(CalibrationPrompt(
-                prompt_id=str(raw["prompt_id"]), source=str(raw["source"]),
-                source_id=str(raw["source_id"]), category=str(raw["category"]),
-                high_level_domain=str(raw["high_level_domain"]),
-                expected_label=str(raw["expected_label"]), text=str(raw["text"]),
-                prompt_sha256=str(raw["prompt_sha256"]),
-            ))
-        except KeyError as error:
-            raise ValueError(f"Private prompt manifest is missing {error.args[0]!r}") from error
+        prompt = CalibrationPrompt(
+            prompt_id=_required_string(raw, "prompt_id", context="Private prompt manifest"),
+            source=_required_string(raw, "source", context="Private prompt manifest"),
+            source_id=_required_string(raw, "source_id", context="Private prompt manifest"),
+            category=_required_string(raw, "category", context="Private prompt manifest"),
+            high_level_domain=_required_string(raw, "high_level_domain", context="Private prompt manifest"),
+            expected_label=_required_string(raw, "expected_label", context="Private prompt manifest"),
+            text=_required_string(raw, "text", context="Private prompt manifest"),
+            prompt_sha256=_required_string(raw, "prompt_sha256", context="Private prompt manifest"),
+        )
+        if prompt.expected_label not in {"safe", "unsafe"}:
+            raise ValueError("Private prompt manifest expected_label must be safe or unsafe")
+        if hashlib.sha256(prompt.text.encode("utf-8")).hexdigest() != prompt.prompt_sha256:
+            raise ValueError("Private prompt manifest prompt_sha256 does not match text")
+        prompts.append(prompt)
     if len(prompts) != 6 or len({prompt.prompt_id for prompt in prompts}) != 6:
         raise ValueError("Private prompt manifest must contain exactly six unique prompts")
     return prompts
 
 
-def _existing_conditions(path: Path) -> set[tuple[str, float]]:
+def _expected_conditions(prompts: Sequence[CalibrationPrompt]) -> set[tuple[str, float]]:
+    return {(prompt.prompt_id, alpha) for prompt in prompts for alpha in ALPHAS}
+
+
+def _valid_diagnostic(value: object) -> bool:
+    return value is None or (type(value) in (int, float) and math.isfinite(float(value)))
+
+
+def _validate_resume_records(
+    path: Path,
+    *,
+    prompts: Sequence[CalibrationPrompt],
+    artifact_sha256: str,
+    artifact: SteeringVectorArtifact,
+    expected_dtype: str | None = None,
+) -> set[tuple[str, float]]:
     if not path.exists():
         return set()
+    prompt_by_id = {prompt.prompt_id: prompt for prompt in prompts}
+    expected_conditions = _expected_conditions(prompts)
     conditions: set[tuple[str, float]] = set()
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         if not line.strip():
-            continue
-        record = json.loads(line)
-        prompt_id = record.get("prompt_id")
-        alpha = record.get("alpha")
-        if isinstance(prompt_id, str) and type(alpha) in (int, float):
-            conditions.add((prompt_id, float(alpha)))
+            raise ValueError(f"Invalid resume generation record at line {line_number}: blank lines are not allowed")
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise ValueError(f"Invalid resume generation record at line {line_number}: invalid JSON") from error
+        if not isinstance(record, Mapping):
+            raise ValueError(f"Invalid resume generation record at line {line_number}: expected an object")
+        try:
+            prompt_id = _required_string(record, "prompt_id", context="Resume generation record")
+            prompt = prompt_by_id[prompt_id]
+            alpha_value = record.get("alpha")
+            if type(alpha_value) not in (int, float) or float(alpha_value) not in ALPHAS:
+                raise ValueError("alpha must be a calibration alpha")
+            alpha = float(alpha_value)
+            condition = (prompt_id, alpha)
+            if condition not in expected_conditions:
+                raise ValueError("condition is outside the current calibration grid")
+            if condition in conditions:
+                raise ValueError("duplicate condition")
+            for key in ("source", "source_id", "category", "high_level_domain", "expected_label", "prompt_sha256"):
+                if record.get(key) != getattr(prompt, key):
+                    raise ValueError(f"{key} does not match the private manifest")
+            if record.get("prompt_text") != prompt.text:
+                raise ValueError("prompt_text does not match the private manifest")
+            if not isinstance(record.get("response_text"), str):
+                raise ValueError("response_text must be a string")
+            completion = record.get("completion_token_count")
+            if type(completion) is not int or completion < 0:
+                raise ValueError("completion_token_count must be a non-negative integer")
+            if type(record.get("truncated")) is not bool or record["truncated"] != (completion == MAX_NEW_TOKENS):
+                raise ValueError("truncated does not match completion_token_count")
+            expected_termination = "length" if completion == MAX_NEW_TOKENS else "stop"
+            if record.get("termination_state") != expected_termination:
+                raise ValueError("termination_state does not match completion_token_count")
+            if record.get("model") != PRIMARY_MODEL or record.get("artifact_sha256") != artifact_sha256:
+                raise ValueError("model or artifact_sha256 does not match this run")
+            if record.get("artifact_layer") != artifact.layer or record.get("artifact_vector_norm") != artifact.vector_norm:
+                raise ValueError("artifact provenance does not match this run")
+            if record.get("max_new_tokens") != MAX_NEW_TOKENS or record.get("do_sample") is not False:
+                raise ValueError("decoding parameters do not match this run")
+            if record.get("temperature") != 0.0 or record.get("top_p") != 1.0:
+                raise ValueError("decoding parameters do not match this run")
+            dtype = _required_string(record, "dtype", context="Resume generation record")
+            if expected_dtype is not None and dtype != expected_dtype:
+                raise ValueError("dtype does not match this run")
+            for key in ("mean_token_entropy", "normalized_sequence_msp"):
+                if key not in record or not _valid_diagnostic(record[key]):
+                    raise ValueError(f"{key} must be a finite number or null")
+        except (KeyError, ValueError) as error:
+            raise ValueError(f"Invalid resume generation record at line {line_number}: {error}") from error
+        conditions.add(condition)
     return conditions
 
 
@@ -169,6 +276,56 @@ def _append_jsonl(path: Path, record: Mapping[str, object]) -> None:
         handle.flush()
 
 
+def _generation_parameters() -> dict[str, object]:
+    return {
+        "model": PRIMARY_MODEL,
+        "alphas": list(ALPHAS),
+        "system_prompt": SYSTEM_PROMPT,
+        "max_new_tokens": MAX_NEW_TOKENS,
+        "do_sample": False,
+        "temperature": 0.0,
+        "top_p": 1.0,
+    }
+
+
+def _record_artifact_provenance(
+    *, output_dir: Path, prompts: Sequence[CalibrationPrompt], artifact_sha256: str,
+    artifact: SteeringVectorArtifact,
+) -> dict[str, object]:
+    """Validate public run provenance, then persist the artifact before model loading."""
+    manifest_path = output_dir / "run_manifest.json"
+    expected_prompts = [_prompt_dict(prompt, include_text=False) for prompt in prompts]
+    if manifest_path.exists():
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("Run manifest must be an object")
+        if "prompts" in payload and payload["prompts"] != expected_prompts:
+            raise ValueError("Run manifest prompts do not match the private manifest")
+        parameters = payload.get("generation_parameters")
+        if parameters is not None:
+            if not isinstance(parameters, Mapping) or any(
+                parameters.get(key) != value for key, value in _generation_parameters().items()
+            ):
+                raise ValueError("Run manifest generation parameters do not match this run")
+    else:
+        payload = {
+            "prompts": expected_prompts,
+            "repository_commit": _repository_commit(),
+            "generation_parameters": _generation_parameters(),
+        }
+    for key, value in {
+        "artifact_sha256": artifact_sha256,
+        "artifact_model": artifact.model_name,
+        "artifact_layer": artifact.layer,
+        "artifact_vector_norm": artifact.vector_norm,
+    }.items():
+        if key in payload and payload[key] != value:
+            raise ValueError(f"Run manifest {key} does not match this run")
+        payload[key] = value
+    _write_json(manifest_path, payload)
+    return payload
+
+
 def generate_calibration(
     *,
     private_manifest: Mapping[str, object],
@@ -177,11 +334,21 @@ def generate_calibration(
     backend_factory: Callable[..., SteeringModelBackend] = SteeringModelBackend,
 ) -> None:
     """Generate the complete grid with one model instance and JSONL checkpointing."""
+    _ensure_private_output_dir(output_dir)
     prompts = _manifest_prompts(private_manifest)
     artifact_sha256 = _sha256_file(steering_path)
     artifact = SteeringVectorArtifact.from_file(steering_path)
     if artifact.model_name != PRIMARY_MODEL or artifact.layer != 25:
         raise ValueError("Calibration artifact must match Llama 3.1 8B layer 25")
+
+    run_manifest = _record_artifact_provenance(
+        output_dir=output_dir, prompts=prompts, artifact_sha256=artifact_sha256, artifact=artifact,
+    )
+    records_path = output_dir / "raw_generations.jsonl"
+    existing = _validate_resume_records(
+        records_path, prompts=prompts, artifact_sha256=artifact_sha256, artifact=artifact,
+        expected_dtype=run_manifest.get("dtype") if isinstance(run_manifest.get("dtype"), str) else None,
+    )
 
     backend = backend_factory(
         model_name=PRIMARY_MODEL,
@@ -193,9 +360,15 @@ def generate_calibration(
         temperature=0.0,
         top_p=1.0,
     )
-    records_path = output_dir / "raw_generations.jsonl"
-    existing = _existing_conditions(records_path)
     dtype = str(getattr(backend, "torch_dtype", "unknown"))
+    if "dtype" in run_manifest and run_manifest["dtype"] != dtype:
+        raise ValueError("Run manifest dtype does not match this run")
+    run_manifest["dtype"] = dtype
+    _write_json(output_dir / "run_manifest.json", run_manifest)
+    _validate_resume_records(
+        records_path, prompts=prompts, artifact_sha256=artifact_sha256, artifact=artifact,
+        expected_dtype=dtype,
+    )
     for alpha in ALPHAS:
         backend.set_steering_strength(alpha)
         backend.set_steering_enabled(alpha > 0.0)
@@ -236,9 +409,16 @@ def generate_calibration(
             }
             _append_jsonl(records_path, record)
             existing.add(condition)
+    final_conditions = _validate_resume_records(
+        records_path, prompts=prompts, artifact_sha256=artifact_sha256, artifact=artifact,
+        expected_dtype=dtype,
+    )
+    if final_conditions != _expected_conditions(prompts):
+        raise ValueError("Generation did not produce the complete 36-record calibration grid")
 
 
 def blind_calibration(*, output_dir: Path) -> None:
+    _ensure_private_output_dir(output_dir)
     records_path = output_dir / "raw_generations.jsonl"
     records = [json.loads(line) for line in records_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     rows, key = build_blinded_rows(records)
@@ -283,6 +463,7 @@ def _load_manual_scores(path: Path) -> list[ManualScore]:
 
 
 def summarize_calibration_run(*, output_dir: Path, scores_path: Path) -> dict[str, object]:
+    _ensure_private_output_dir(output_dir)
     key = json.loads((output_dir / "condition_key.json").read_text(encoding="utf-8"))
     if not isinstance(key, dict):
         raise ValueError("Condition key must be an object")
