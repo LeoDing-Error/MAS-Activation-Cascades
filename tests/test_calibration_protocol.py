@@ -1,8 +1,16 @@
+from dataclasses import replace
+
+import pytest
+
 from src.experiments.calibration_protocol import (
+    ALPHAS,
+    ManualScore,
     XSTEST_COMMIT,
+    build_blinded_rows,
     normalize_prompt,
     select_sorry_prompts,
     select_xstest_pair,
+    summarize_calibration,
     token_jaccard,
 )
 
@@ -65,3 +73,113 @@ def test_xstest_pair_is_pinned_and_contains_safe_and_unsafe_rows() -> None:
     assert XSTEST_COMMIT == "d7bb5bd738c1fcbc36edd83d5e7d1b71a3e2d84d"
     assert [item.source_id for item in selected] == ["1", "26"]
     assert [item.expected_label for item in selected] == ["safe", "unsafe"]
+
+
+def make_36_generation_records() -> list[dict[str, object]]:
+    """Create the complete six-prompt, six-alpha calibration grid."""
+    records: list[dict[str, object]] = []
+    for prompt_id in ("sorry-1", "sorry-2", "sorry-3", "sorry-4", "xstest-safe", "xstest-unsafe"):
+        for alpha in ALPHAS:
+            records.append({
+                "prompt_id": prompt_id,
+                "alpha": alpha,
+                "prompt_text": f"Prompt for {prompt_id}",
+                "response_text": f"Response for {prompt_id} at {alpha}",
+                "model": "test-model",
+            })
+    return records
+
+
+def make_scored_records(
+    *,
+    alpha_02_passes: bool = False,
+    alpha_03_passes: bool = False,
+    degenerate_at: float | None = None,
+    baseline_sorry_refusals: int = 4,
+) -> tuple[list[ManualScore], dict[str, dict[str, object]]]:
+    """Return complete scores and their unblinded key, altering named conditions only."""
+    _, key = build_blinded_rows(make_36_generation_records(), seed=20260815)
+    scores: list[ManualScore] = []
+    for response_id, condition in key.items():
+        prompt_id = condition["prompt_id"]
+        alpha = condition["alpha"]
+        refusal = 0
+        if prompt_id == "xstest-safe":
+            refusal = 2
+        elif alpha == 0.0 and prompt_id.startswith("sorry-"):
+            refusal = 0 if int(prompt_id.rsplit("-", 1)[1]) <= baseline_sorry_refusals else 1
+        elif alpha in ({0.2} if alpha_02_passes else set()) | ({0.3} if alpha_03_passes else set()):
+            refusal = 2 if prompt_id == "xstest-safe" else 1
+        scores.append(ManualScore(
+            response_id=response_id,
+            refusal_compliance=refusal,
+            coherence=2,
+            relevance=2,
+            repetitive=alpha == degenerate_at and prompt_id == "sorry-1",
+            truncated=False,
+        ))
+    return scores, key
+
+
+def test_blinded_rows_hide_alpha_and_keep_key_separate() -> None:
+    rows, key = build_blinded_rows(make_36_generation_records(), seed=20260815)
+    assert len(rows) == 36
+    assert len(key) == 36
+    assert all("alpha" not in row and "condition" not in row for row in rows)
+    assert all(row["response_id"].startswith("R") for row in rows)
+    assert {row["response_id"] for row in rows} == set(key)
+
+
+def test_blinding_is_stable_for_a_fixed_seed() -> None:
+    first_rows, first_key = build_blinded_rows(make_36_generation_records(), seed=20260815)
+    second_rows, second_key = build_blinded_rows(make_36_generation_records(), seed=20260815)
+    assert first_rows == second_rows
+    assert first_key == second_key
+
+
+def test_rejects_missing_score_for_a_blinded_response() -> None:
+    scores, key = make_scored_records()
+    with pytest.raises(ValueError, match="exactly one score"):
+        summarize_calibration((scores[1:], key))
+
+
+def test_rejects_blank_or_invalid_manual_score_cells() -> None:
+    scores, key = make_scored_records()
+    invalid = replace(scores[0], coherence="")
+    with pytest.raises(ValueError, match="coherence"):
+        summarize_calibration(([invalid, *scores[1:]], key))
+
+
+def test_rejects_manual_score_for_unknown_response_id() -> None:
+    scores, key = make_scored_records()
+    unknown = replace(scores[0], response_id="R9999")
+    with pytest.raises(ValueError, match="unknown response"):
+        summarize_calibration(([unknown, *scores[1:]], key))
+
+
+def test_baseline_failure_prevents_alpha_selection() -> None:
+    summary = summarize_calibration(make_scored_records(baseline_sorry_refusals=2))
+    assert summary.baseline_valid is False
+    assert "sorry_refusals" in summary.baseline_reasons
+    assert summary.selected_alpha is None
+
+
+def test_selects_smallest_alpha_that_passes_every_gate() -> None:
+    summary = summarize_calibration(make_scored_records(alpha_02_passes=True, alpha_03_passes=True))
+    assert summary.baseline_valid is True
+    assert summary.alpha_results[0.2].passed is True
+    assert summary.alpha_results[0.3].passed is True
+    assert summary.selected_alpha == 0.2
+
+
+def test_degenerate_response_disqualifies_candidate() -> None:
+    summary = summarize_calibration(make_scored_records(alpha_02_passes=True, degenerate_at=0.2))
+    assert summary.alpha_results[0.2].passed is False
+    assert "degeneration" in summary.alpha_results[0.2].reasons
+
+
+def test_no_passing_alpha_reports_no_selection() -> None:
+    summary = summarize_calibration(make_scored_records())
+    assert summary.baseline_valid is True
+    assert all(not result.passed for result in summary.alpha_results.values())
+    assert summary.selected_alpha is None
