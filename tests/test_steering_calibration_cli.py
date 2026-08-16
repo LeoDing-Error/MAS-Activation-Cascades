@@ -825,6 +825,48 @@ def test_sorry_download_uses_resolved_revision_for_both_files(tmp_path: Path, mo
     assert [record["high_level_domain"] for record in records] == list(SORRY_DOMAINS)
 
 
+def _current_sorry_meta_source(
+    *,
+    category_descriptions: object | None = None,
+    category_descriptions_short: object | None = None,
+    category_descriptions_shortest: object | None = None,
+) -> str:
+    values = (
+        category_descriptions if category_descriptions is not None
+        else [f"Full category {index}" for index in range(1, 46)],
+        category_descriptions_short if category_descriptions_short is not None
+        else [f"Short category {index}" for index in range(1, 46)],
+        category_descriptions_shortest if category_descriptions_shortest is not None
+        else [f"Brief category {index}" for index in range(1, 46)],
+    )
+    return "\n".join(
+        f"{name} = {value!r}"
+        for name, value in zip(
+            ("category_descriptions", "category_descriptions_short", "category_descriptions_shortest"),
+            values,
+        )
+    )
+
+
+def _legacy_sorry_meta_source(*, domains: tuple[str, ...] = SORRY_DOMAINS) -> str:
+    return "CATEGORY_TO_DOMAIN = {\n" + ",\n".join(
+        f"    'category-{index}': '{domain}'" for index, domain in enumerate(domains, start=1)
+    ) + "\n}\n"
+
+
+def _configure_sorry_hub(
+    monkeypatch: pytest.MonkeyPatch, *, question_path: Path, meta_path: Path,
+) -> None:
+    class FakeApi:
+        def dataset_info(self, _: str) -> SimpleNamespace:
+            return SimpleNamespace(sha="resolved-sha")
+
+    def fake_download(_: str, **kwargs: object) -> str:
+        return str(question_path if kwargs["filename"] == "question.jsonl" else meta_path)
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=FakeApi, hf_hub_download=fake_download))
+
+
 def test_sorry_download_maps_current_literal_list_metadata_categories(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -837,21 +879,8 @@ def test_sorry_download_maps_current_literal_list_metadata_categories(
         for index in range(1, 46)
     ), encoding="utf-8")
     meta_path = tmp_path / "meta_info.py"
-    meta_path.write_text(
-        "category_descriptions = " + repr([f"Full category {index}" for index in range(1, 46)]) + "\n"
-        "category_descriptions_short = " + repr([f"Short category {index}" for index in range(1, 46)]) + "\n"
-        "category_descriptions_shortest = " + repr([f"Brief category {index}" for index in range(1, 46)]) + "\n",
-        encoding="utf-8",
-    )
-
-    class FakeApi:
-        def dataset_info(self, _: str) -> SimpleNamespace:
-            return SimpleNamespace(sha="resolved-sha")
-
-    def fake_download(_: str, **kwargs: object) -> str:
-        return str(question_path if kwargs["filename"] == "question.jsonl" else meta_path)
-
-    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=FakeApi, hf_hub_download=fake_download))
+    meta_path.write_text(_current_sorry_meta_source(), encoding="utf-8")
+    _configure_sorry_hub(monkeypatch, question_path=question_path, meta_path=meta_path)
     records, revision = _download_sorry_records()
 
     assert revision == "resolved-sha"
@@ -869,6 +898,71 @@ def test_literal_meta_mapping_rejects_malformed_authoritative_category_list() ->
     malformed = "category_descriptions = " + repr([f"Category {index}" for index in range(1, 45)])
     with pytest.raises(ValueError, match="category_descriptions"):
         _literal_category_mapping(malformed)
+
+
+@pytest.mark.parametrize("source", [
+    _current_sorry_meta_source() + "\n" + _legacy_sorry_meta_source(),
+    "\n".join(_current_sorry_meta_source().splitlines()[:-1]),
+    _current_sorry_meta_source(category_descriptions_short=[f"Short {index}" for index in range(1, 45)]),
+    "\n".join((
+        "category_descriptions = alias = " + repr([f"Full category {index}" for index in range(1, 46)]),
+        "category_descriptions_short = " + repr([f"Short category {index}" for index in range(1, 46)]),
+        "category_descriptions_shortest = " + repr([f"Brief category {index}" for index in range(1, 46)]),
+    )),
+    _current_sorry_meta_source().replace(
+        "category_descriptions_short = ", "category_descriptions_short = build_categories() # ", 1,
+    ),
+])
+def test_literal_meta_mapping_rejects_incomplete_or_ambiguous_schemas(source: str) -> None:
+    from experiments.run_steering_calibration import _literal_category_mapping
+
+    with pytest.raises(ValueError, match="SORRY-Bench|schema|category_descriptions"):
+        _literal_category_mapping(source)
+
+
+def test_literal_meta_mapping_requires_legacy_dict_to_cover_every_domain() -> None:
+    from experiments.run_steering_calibration import _literal_category_mapping
+
+    with pytest.raises(ValueError, match="all SORRY domains"):
+        _literal_category_mapping(_legacy_sorry_meta_source(domains=SORRY_DOMAINS[:-1]))
+
+
+@pytest.mark.parametrize("raw_category", [True, 1.0, "01", "0", 46])
+def test_sorry_download_rejects_noncanonical_current_schema_categories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raw_category: object,
+) -> None:
+    from experiments.run_steering_calibration import _download_sorry_records
+
+    question_path = tmp_path / "question.jsonl"
+    question_path.write_text(json.dumps({
+        "question_id": 1, "category": raw_category, "turns": ["prompt"],
+    }), encoding="utf-8")
+    meta_path = tmp_path / "meta_info.py"
+    meta_path.write_text(_current_sorry_meta_source(), encoding="utf-8")
+    _configure_sorry_hub(monkeypatch, question_path=question_path, meta_path=meta_path)
+
+    with pytest.raises(ValueError, match="canonical SORRY-Bench category"):
+        _download_sorry_records()
+
+
+@pytest.mark.parametrize("raw_category", [1, "1"])
+def test_sorry_download_accepts_canonical_current_schema_categories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raw_category: object,
+) -> None:
+    from experiments.run_steering_calibration import _download_sorry_records
+
+    question_path = tmp_path / "question.jsonl"
+    question_path.write_text(json.dumps({
+        "question_id": 1, "category": raw_category, "turns": ["prompt"],
+    }), encoding="utf-8")
+    meta_path = tmp_path / "meta_info.py"
+    meta_path.write_text(_current_sorry_meta_source(), encoding="utf-8")
+    _configure_sorry_hub(monkeypatch, question_path=question_path, meta_path=meta_path)
+
+    records, _ = _download_sorry_records()
+    assert records == [{
+        "source_id": "1", "category": "1", "high_level_domain": "hate_speech_generation", "text": "prompt",
+    }]
 
 
 def test_generate_requires_complete_matching_public_manifest(tmp_path: Path) -> None:

@@ -820,61 +820,112 @@ def summarize_calibration_run(*, output_dir: Path, scores_path: Path) -> dict[st
     return payload
 
 
+_CURRENT_SORRY_METADATA_NAMES = (
+    "category_descriptions",
+    "category_descriptions_short",
+    "category_descriptions_shortest",
+)
+
+
 def _literal_category_mapping(source: str) -> dict[str, str]:
     """Extract a safe, literal category-to-domain mapping from meta_info.py."""
-    tree = ast.parse(source)
-    candidates: list[dict[str, str]] = []
-    category_description_values: list[object] = []
+    mapping, _ = _literal_category_mapping_with_schema(source)
+    return mapping
+
+
+def _literal_category_mapping_with_schema(source: str) -> tuple[dict[str, str], bool]:
+    """Return a literal mapping and whether it uses the current three-list schema."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as error:
+        raise ValueError("Invalid literal SORRY-Bench metadata schema") from error
+
+    current_values: dict[str, list[object]] = {name: [] for name in _CURRENT_SORRY_METADATA_NAMES}
+    legacy_candidates: list[dict[str, str]] = []
+    expected_domains = set(SORRY_DOMAINS)
     for node in tree.body:
         if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        current_targets = {
+            target.id
+            for target in ast.walk(node)
+            if isinstance(target, ast.Name) and isinstance(target.ctx, ast.Store)
+            and target.id in _CURRENT_SORRY_METADATA_NAMES
+        }
+        if current_targets:
+            if (
+                len(current_targets) != 1
+                or len(targets) != 1
+                or not isinstance(targets[0], ast.Name)
+                or targets[0].id not in current_targets
+            ):
+                raise ValueError("Current SORRY-Bench metadata assignments must use one simple name")
+            value_node = node.value
+            try:
+                value = ast.literal_eval(value_node)
+            except (ValueError, TypeError):
+                raise ValueError(
+                    "Current SORRY-Bench category descriptions must be literal lists"
+                ) from None
+            current_values[targets[0].id].append(value)
             continue
         value_node = node.value
         if value_node is None:
             continue
-        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        is_category_descriptions = any(
-            isinstance(target, ast.Name) and target.id == "category_descriptions"
-            for target in targets
-        )
         try:
             value = ast.literal_eval(value_node)
         except (ValueError, TypeError):
-            if is_category_descriptions:
-                raise ValueError(
-                    "Literal SORRY-Bench category_descriptions must be exactly 45 nonempty strings"
-                ) from None
-            continue
-        if is_category_descriptions:
-            category_description_values.append(value)
             continue
         if isinstance(value, dict) and value and all(
             isinstance(key, str) and key.strip() and isinstance(item, str)
             for key, item in value.items()
         ):
             mapping = {str(key): str(item) for key, item in value.items()}
-            if set(mapping.values()).issubset(set(SORRY_DOMAINS)):
-                candidates.append(mapping)
-    if category_description_values:
-        if len(category_description_values) != 1:
-            raise ValueError("Could not find exactly one literal SORRY-Bench category_descriptions list")
-        category_descriptions = category_description_values[0]
-        if (
-            not isinstance(category_descriptions, list)
-            or len(category_descriptions) != 45
-            or any(not isinstance(description, str) or not description.strip() for description in category_descriptions)
-        ):
-            raise ValueError(
-                "Literal SORRY-Bench category_descriptions must be exactly 45 nonempty strings"
-            )
+            if set(mapping.values()).issubset(expected_domains):
+                legacy_candidates.append(mapping)
+
+    has_current_schema = any(current_values.values())
+    if has_current_schema:
+        if legacy_candidates:
+            raise ValueError("SORRY-Bench metadata must contain exactly one schema")
+        for name, values in current_values.items():
+            if len(values) != 1:
+                raise ValueError("Current SORRY-Bench metadata must contain each category description list once")
+            descriptions = values[0]
+            if (
+                not isinstance(descriptions, list)
+                or len(descriptions) != 45
+                or any(not isinstance(description, str) or not description.strip() for description in descriptions)
+            ):
+                raise ValueError(
+                    "Current SORRY-Bench category_descriptions lists must contain exactly 45 nonempty strings"
+                )
         return {
             **{str(category): SORRY_DOMAINS[0] for category in range(1, 7)},
             **{str(category): SORRY_DOMAINS[1] for category in range(7, 26)},
             **{str(category): SORRY_DOMAINS[2] for category in range(26, 41)},
             **{str(category): SORRY_DOMAINS[3] for category in range(41, 46)},
-        }
-    if len(candidates) != 1:
+        }, True
+
+    if len(legacy_candidates) != 1:
         raise ValueError("Could not find one literal SORRY-Bench category/domain mapping")
-    return candidates[0]
+    mapping = legacy_candidates[0]
+    if set(mapping.values()) != expected_domains:
+        raise ValueError("Legacy SORRY-Bench category/domain mapping must cover all SORRY domains")
+    return mapping, False
+
+
+def _canonical_current_sorry_category(raw_category: object) -> str:
+    if type(raw_category) is int:
+        category = raw_category
+    elif isinstance(raw_category, str) and raw_category.isascii() and raw_category.isdecimal():
+        category = int(raw_category)
+    else:
+        raise ValueError("Expected a canonical SORRY-Bench category in 1..45")
+    if not 1 <= category <= 45 or (isinstance(raw_category, str) and raw_category != str(category)):
+        raise ValueError("Expected a canonical SORRY-Bench category in 1..45")
+    return str(category)
 
 
 def _load_ta2_instructions(path: Path) -> list[str]:
@@ -921,13 +972,16 @@ def _download_sorry_records() -> tuple[list[dict[str, str]], str]:
                 "Accept the sorry-bench/sorry-bench-202503 license and enable HF_TOKEN notebook access."
             ) from error
         raise
-    category_to_domain = _literal_category_mapping(Path(meta_path).read_text(encoding="utf-8"))
+    category_to_domain, current_schema = _literal_category_mapping_with_schema(
+        Path(meta_path).read_text(encoding="utf-8")
+    )
     records: list[dict[str, str]] = []
     for line in Path(question_path).read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         raw = json.loads(line)
-        category = str(raw["category"])
+        raw_category = raw["category"]
+        category = _canonical_current_sorry_category(raw_category) if current_schema else str(raw_category)
         turns = raw["turns"]
         if not isinstance(turns, list) or not turns or not isinstance(turns[0], str):
             raise ValueError("SORRY-Bench record must have a first text turn")
