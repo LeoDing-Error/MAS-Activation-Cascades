@@ -88,6 +88,14 @@ class Phase1SweepMatrixTests(unittest.TestCase):
 
 
 class Phase1SweepMultiGpuTests(unittest.TestCase):
+    def test_sweep_parser_requires_explicit_confirmed_strength(self) -> None:
+        with self.assertRaises(SystemExit):
+            run_phase1_sweep._build_parser().parse_args([
+                "--experiments", "1.2",
+                "--steering-vector", "steering.pt",
+                "--held-out-confirmation", "held-out.json",
+            ])
+
     def test_build_lanes_pairs_clean_endpoints_with_multi_gpu_worker_sets(self) -> None:
         lanes = run_phase1_sweep._build_lanes(
             ["http://127.0.0.1:8000/v1", "http://127.0.0.1:8001/v1"],
@@ -150,13 +158,22 @@ class Phase1SweepMultiGpuTests(unittest.TestCase):
             worker_gpu_set="2,3",
         )
 
-        command, env = run_phase1_sweep.build_command(job, lane)
+        command, env = run_phase1_sweep.build_command(
+            job,
+            lane,
+            held_out_confirmation="results/held_out_confirmation.json",
+        )
 
         self.assertEqual(env["CUDA_VISIBLE_DEVICES"], "2,3")
         self.assertIn("--clean-api-base", command)
         self.assertEqual(command[command.index("--clean-api-base") + 1], "http://127.0.0.1:8001/v1")
         self.assertIn("--task-indices", command)
         self.assertEqual(command[command.index("--task-indices") + 1], "0,2")
+        self.assertIn("--held-out-confirmation", command)
+        self.assertEqual(
+            command[command.index("--held-out-confirmation") + 1],
+            "results/held_out_confirmation.json",
+        )
 
 
 if __name__ == "__main__":

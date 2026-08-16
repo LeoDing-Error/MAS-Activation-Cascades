@@ -28,6 +28,7 @@ from src.experiments.phase1_config import (
     parse_int_csv,
     select_tasks,
 )
+from src.experiments.phase1_gate import load_held_out_confirmation
 from src.topologies.runner import AgentNode, CascadeTopologyRunner
 
 
@@ -37,7 +38,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", default=PRIMARY_MODEL)
     parser.add_argument("--fallback-model", default=FALLBACK_MODEL)
     parser.add_argument("--steering-vector", type=Path, required=True)
-    parser.add_argument("--steering-strength", type=float, default=1.0)
+    parser.add_argument(
+        "--steering-strength",
+        type=float,
+        default=None,
+        help="Required held-out-confirmed treatment alpha for Experiments 1.2-1.4",
+    )
     parser.add_argument("--alphas", default="0.0,0.5,1.0,1.5,2.0")
     parser.add_argument("--n-tasks", type=int, default=None)
     parser.add_argument("--task-names", default=None)
@@ -47,6 +53,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--chat-turn-limit", type=int, default=2)
     parser.add_argument("--clean-api-base", default=None)
     parser.add_argument("--clean-api-key", default="EMPTY")
+    parser.add_argument(
+        "--held-out-confirmation",
+        type=Path,
+        default=None,
+        help="Passed held-out confirmation JSON binding Experiments 1.2-1.4 to the artifact and alpha",
+    )
     parser.add_argument(
         "--allow-local-clean-models",
         action="store_true",
@@ -460,8 +472,22 @@ def run_experiment_1_4(args: argparse.Namespace) -> None:
     save_json(output_dir / "exp1_4_summary.json", {"experiment": "1.4", "task_summaries": summaries})
 
 
-def main() -> None:
-    args = _build_parser().parse_args()
+def main(argv: List[str] | None = None) -> None:
+    args = _build_parser().parse_args(argv)
+
+    if args.held_out_confirmation is None:
+        raise ValueError(
+            "All Phase 1 experiments require a passed held-out confirmation via "
+            "--held-out-confirmation; the calibration pilot alone does not unlock Phase 1"
+        )
+    if args.experiment in {"1.2", "1.3", "1.4"} and args.steering_strength is None:
+        raise ValueError("Experiments 1.2-1.4 require an explicit --steering-strength")
+    load_held_out_confirmation(
+        args.held_out_confirmation,
+        steering_vector_path=args.steering_vector,
+        steering_strength=args.steering_strength if args.experiment != "1.1" else None,
+    )
+
     args.results_dir.mkdir(parents=True, exist_ok=True)
 
     if args.experiment in {"1.2", "1.3", "1.4"} and args.clean_api_base is None and not args.allow_local_clean_models:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+import json
 from random import Random
 from typing import Literal, Mapping, Sequence
 import unicodedata
@@ -24,6 +25,9 @@ class CalibrationPrompt:
 @dataclass(frozen=True)
 class ManualScore:
     response_id: str
+    run_id: str
+    blind_run_digest: str
+    response_sha256: str
     refusal_compliance: int
     coherence: int
     relevance: int
@@ -77,15 +81,37 @@ def build_blinded_rows(
     )
     shuffled_records = list(ordered_records)
     Random(seed).shuffle(shuffled_records)
+    run_id = _generation_string(ordered_records[0], "run_id")
+    response_hashes = {
+        (_generation_string(record, "prompt_id"), _generation_alpha(record)): _response_sha256(record)
+        for record in ordered_records
+    }
+    blind_run_digest = sha256(json.dumps(
+        {
+            "run_id": run_id,
+            "seed": seed,
+            "responses": [
+                [prompt_id, alpha, response_hashes[(prompt_id, alpha)]]
+                for prompt_id, alpha in sorted(response_hashes)
+            ],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
 
     rows: list[dict[str, object]] = []
     key: dict[str, dict[str, object]] = {}
     for index, record in enumerate(shuffled_records, start=1):
         response_id = f"R{index:04d}"
+        condition = (_generation_string(record, "prompt_id"), _generation_alpha(record))
+        response_sha256 = response_hashes[condition]
         prompt_text = _generation_string(record, "prompt_text")
         response_text = _generation_string(record, "response_text")
         rows.append({
             "response_id": response_id,
+            "run_id": run_id,
+            "blind_run_digest": blind_run_digest,
+            "response_sha256": response_sha256,
             "prompt_text": prompt_text,
             "response_text": response_text,
             "refusal_compliance": "",
@@ -94,7 +120,12 @@ def build_blinded_rows(
             "repetitive": "",
             "truncated": "",
         })
-        key[response_id] = dict(record)
+        key[response_id] = {
+            **dict(record),
+            "run_id": run_id,
+            "blind_run_digest": blind_run_digest,
+            "response_sha256": response_sha256,
+        }
     return rows, key
 
 
@@ -136,6 +167,16 @@ def _validate_manual_scores(
         if score.response_id in scores_by_id:
             raise ValueError(f"Expected exactly one score for response ID: {score.response_id}")
         _validate_score(score)
+        condition = condition_key[score.response_id]
+        expected_binding = (
+            _generation_string(condition, "run_id"),
+            _generation_string(condition, "blind_run_digest"),
+            _generation_string(condition, "response_sha256"),
+        )
+        if (score.run_id, score.blind_run_digest, score.response_sha256) != expected_binding:
+            raise ValueError(
+                f"Manual score for {score.response_id} does not match the current blinded content"
+            )
         scores_by_id[score.response_id] = score
 
     if set(scores_by_id) != set(condition_key):
@@ -144,6 +185,9 @@ def _validate_manual_scores(
 
 
 def _validate_score(score: ManualScore) -> None:
+    for name in ("run_id", "blind_run_digest", "response_sha256"):
+        if not _is_sha256(getattr(score, name)):
+            raise ValueError(f"Manual score {name} must be a SHA-256 digest")
     for name in ("refusal_compliance", "coherence", "relevance"):
         value = getattr(score, name)
         if type(value) is not int or value not in range(3):
@@ -180,6 +224,9 @@ def _validate_generation_grid(generation_records: Sequence[Mapping[str, object]]
         for record in generation_records
     ]
     _validate_condition_grid(conditions)
+    run_ids = {_generation_string(record, "run_id") for record in generation_records}
+    if len(run_ids) != 1 or not _is_sha256(next(iter(run_ids))):
+        raise ValueError("Generation records must share one immutable SHA-256 run_id")
 
 
 def _validate_condition_grid(conditions: Sequence[tuple[str, float]]) -> None:
@@ -253,6 +300,32 @@ def _generation_alpha(record: Mapping[str, object]) -> float:
     return float(alpha)
 
 
+def _response_sha256(record: Mapping[str, object]) -> str:
+    return response_content_sha256(
+        _generation_string(record, "prompt_text"),
+        _generation_string(record, "response_text"),
+    )
+
+
+def response_content_sha256(prompt_text: str, response_text: str) -> str:
+    """Hash exactly the prompt and response text visible to the blinded scorer."""
+    payload = {"prompt_text": prompt_text, "response_text": response_text}
+    return sha256(json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")).hexdigest()
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
 def normalize_prompt(text: str) -> str:
     """Canonicalize prompt text before comparison."""
     normalized = unicodedata.normalize("NFKC", text).lower()
@@ -319,7 +392,7 @@ def select_xstest_pair(records: Sequence[Mapping[str, str]]) -> list[Calibration
         if source_id in by_id:
             raise ValueError(f"Duplicate XSTest source ID: {source_id}")
         source_revision = record.get("source_revision")
-        if source_revision is not None and source_revision != XSTEST_COMMIT:
+        if not isinstance(source_revision, str) or source_revision != XSTEST_COMMIT:
             raise ValueError("XSTest source revision does not match the pinned commit")
         by_id[source_id] = record
 

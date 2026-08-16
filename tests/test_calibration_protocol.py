@@ -26,8 +26,19 @@ def sorry_record(source_id: str, category: str, domain: str, text: str) -> dict[
     }
 
 
-def xstest_record(source_id: str, label: str, text: str) -> dict[str, str]:
-    return {"source_id": source_id, "label": label, "text": text}
+def xstest_record(
+    source_id: str,
+    label: str,
+    text: str,
+    *,
+    source_revision: str = XSTEST_COMMIT,
+) -> dict[str, str]:
+    return {
+        "source_id": source_id,
+        "label": label,
+        "text": text,
+        "source_revision": source_revision,
+    }
 
 
 def test_normalization_and_jaccard_detect_training_overlap() -> None:
@@ -77,6 +88,17 @@ def test_xstest_pair_is_pinned_and_contains_safe_and_unsafe_rows() -> None:
     assert [item.expected_label for item in selected] == ["safe", "unsafe"]
 
 
+def test_xstest_pair_rejects_rows_without_the_pinned_revision() -> None:
+    rows = [
+        xstest_record("1", "safe", "safe contrast"),
+        xstest_record("26", "unsafe", "unsafe contrast"),
+    ]
+    del rows[0]["source_revision"]
+
+    with pytest.raises(ValueError, match="source revision"):
+        select_xstest_pair(rows)
+
+
 def make_36_generation_records() -> list[dict[str, object]]:
     """Create the complete six-prompt, six-alpha calibration grid."""
     records: list[dict[str, object]] = []
@@ -91,6 +113,7 @@ def make_36_generation_records() -> list[dict[str, object]]:
                 "prompt_text": f"Prompt for {prompt_id}",
                 "response_text": f"Response for {prompt_id} at {alpha}",
                 "model": "test-model",
+                "run_id": "a" * 64,
             })
     return records
 
@@ -117,6 +140,9 @@ def make_scored_records(
             refusal = 2 if prompt_id == XSTEST_SAFE_PROMPT_ID else 1
         scores.append(ManualScore(
             response_id=response_id,
+            run_id=str(condition["run_id"]),
+            blind_run_digest=str(condition["blind_run_digest"]),
+            response_sha256=str(condition["response_sha256"]),
             refusal_compliance=refusal,
             coherence=2,
             relevance=2,
@@ -133,6 +159,9 @@ def test_blinded_rows_hide_alpha_and_keep_key_separate() -> None:
     assert all("alpha" not in row and "condition" not in row for row in rows)
     assert all(row["response_id"].startswith("R") for row in rows)
     assert {row["response_id"] for row in rows} == set(key)
+    assert {row["run_id"] for row in rows} == {"a" * 64}
+    assert len({row["blind_run_digest"] for row in rows}) == 1
+    assert all(len(str(row["response_sha256"])) == 64 for row in rows)
 
 
 def test_blinding_is_stable_for_a_fixed_seed() -> None:
@@ -179,6 +208,14 @@ def test_rejects_manual_score_for_unknown_response_id() -> None:
     unknown = replace(scores[0], response_id="R9999")
     with pytest.raises(ValueError, match="unknown response"):
         summarize_calibration(([unknown, *scores[1:]], key))
+
+
+def test_rejects_manual_score_bound_to_stale_blinded_content() -> None:
+    scores, key = make_scored_records()
+    stale = replace(scores[0], response_sha256="0" * 64)
+
+    with pytest.raises(ValueError, match="blinded content"):
+        summarize_calibration(([stale, *scores[1:]], key))
 
 
 def test_baseline_failure_prevents_alpha_selection() -> None:

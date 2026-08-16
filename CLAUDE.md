@@ -50,22 +50,25 @@ conda run -n cascade python scripts/build_ta2_pairs.py \
 # Default endpoint: http://127.0.0.1:8000/v1
 ```
 
-### 4. Run experiments
+### 4. Run experiments (only after separate held-out confirmation)
 ```bash
+# Every Phase 1 entry surface requires the passed confirmation record.
 # Exp 1.1 — single-agent steering validation (no server needed)
 conda run -n cascade python experiments/run_phase1.py \
-  --experiment 1.1 --steering-vector steering_vectors/harmfulness_llama3_8b.pt --n-tasks 10
+  --experiment 1.1 --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
+  --held-out-confirmation results/held_out_confirmation.json --n-tasks 10
 
 # Exp 1.2–1.4 — multi-agent (requires running vLLM server)
-./scripts/run_phase1_local.sh 1.2 steering_vectors/harmfulness_llama3_8b.pt
-./scripts/run_phase1_local.sh 1.3 steering_vectors/harmfulness_llama3_8b.pt
-./scripts/run_phase1_local.sh 1.4 steering_vectors/harmfulness_llama3_8b.pt
+./scripts/run_phase1_local.sh --steering-strength <confirmed-alpha> --held-out-confirmation results/held_out_confirmation.json 1.2 steering_vectors/harmfulness_llama3_8b.pt
+./scripts/run_phase1_local.sh --steering-strength <confirmed-alpha> --held-out-confirmation results/held_out_confirmation.json 1.3 steering_vectors/harmfulness_llama3_8b.pt
+./scripts/run_phase1_local.sh --steering-strength <confirmed-alpha> --held-out-confirmation results/held_out_confirmation.json 1.4 steering_vectors/harmfulness_llama3_8b.pt
 
-# Parallel sweep across strengths/repeats
+# Parallel sweep at the one confirmed strength
 ./scripts/run_phase1_sweep.sh \
   --experiments 1.2,1.3,1.4 \
   --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
-  --steering-strengths 0.5,1.0,1.5 \
+  --steering-strengths <confirmed-alpha> \
+  --held-out-confirmation results/held_out_confirmation.json \
   --task-indices 0,1,2,3,4 \
   --repeats 3 \
   --clean-api-bases http://127.0.0.1:8000/v1 \

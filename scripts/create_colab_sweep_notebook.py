@@ -6,6 +6,7 @@ Re-run whenever any cell changes:
 """
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -15,7 +16,10 @@ except ImportError:
     sys.exit("nbformat is required: pip install nbformat")
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "notebooks" / "colab_phase1_full_sweep.ipynb"
+DEFAULT_OUTPUT = ROOT / "notebooks" / "colab_phase1_full_sweep.ipynb"
+parser = argparse.ArgumentParser(description="Generate the Phase 1 sweep notebook")
+parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+OUTPUT = parser.parse_args().output
 OUTPUT.parent.mkdir(parents=True, exist_ok=True)
 
 nb = nbformat.v4.new_notebook()
@@ -39,12 +43,12 @@ nb.cells = [
 # MAS Activation Cascades — Phase 1 Full Sweep (Colab A100 80 GB)
 
 Resumable end-to-end sweep across **Experiments 1.2, 1.3, 1.4** on Llama-3.1-8B-Instruct,
-spanning all steering strengths × tasks × repeats.
+using only the alpha that passed a separate held-out confirmation.
 
 **Requirements:**
 - Colab Pro+ / Enterprise with **A100 80 GB**
 - HuggingFace token with Llama-3 access, stored as Colab secret `HF_TOKEN`
-- Steering vector from the quickstart notebook (or it will compute one if missing)
+- Existing steering vector and a passed `held_out_confirmation.json` bound to it
 
 **Plan:**
 1. Mount Drive (persists vector + results across sessions).
@@ -54,8 +58,9 @@ spanning all steering strengths × tasks × repeats.
 5. Launch the resumable sweep (`--skip-existing`) — completed jobs are skipped, so re-running this cell after a disconnect picks up where you left off.
 6. Shut down the server and archive results.
 
-**Sweep matrix (default):** 3 experiments × 5 strengths × 5 tasks × 3 repeats = 225 trials (~45 sweep jobs).
-Expect 8–20 hours total wall time. Use `--skip-existing` across multiple sessions if needed.
+**Sweep matrix:** 3 experiments × 1 confirmed strength × 5 tasks × 3 repeats.
+The notebook and CLI refuse broad/default-alpha sweeps. Use `--skip-existing`
+across multiple sessions if needed.
 """),
 
     md("## 1 · Mount Google Drive"),
@@ -141,6 +146,7 @@ PAIRS_PATH = f'{DRIVE_DIR}/data/contrastive_pairs/ta2_harmful_pairs.json'
 VECTOR_PATH = f'{DRIVE_DIR}/steering_vectors/harmfulness_llama3_8b.pt'
 ANALYSIS_PATH = f'{DRIVE_DIR}/steering_vectors/harmfulness_llama3_8b.analysis.pt'
 SWEEP_RESULTS_ROOT = f'{DRIVE_DIR}/results/sweeps'
+HELD_OUT_CONFIRMATION_PATH = f'{DRIVE_DIR}/results/held_out_confirmation.json'
 LOCAL_VECTOR_PATH = '/content/harmfulness_llama3_8b.pt'
 LOCAL_ANALYSIS_PATH = '/content/harmfulness_llama3_8b.analysis.pt'
 
@@ -153,32 +159,24 @@ print("Persistent artifacts:", DRIVE_DIR)
 print("Local model cache:", os.environ['HF_HOME'])
 """),
 
-    md("## 7 · Ensure Contrastive Pairs and Steering Vector Exist"),
+md("## 7 · Verify the Held-Out Confirmation and Existing Artifact"),
     code("""\
-import shutil, subprocess, os, torch
+import json, os
+from pathlib import Path
 
-if not os.path.exists(PAIRS_PATH):
-    subprocess.run(['python', 'scripts/build_ta2_pairs.py', '--output', PAIRS_PATH], check=True)
-else:
-    print("Pairs already exist — skipping.")
-
-if not os.path.exists(VECTOR_PATH):
-    print("Computing steering vector (~15–20 min on A100)...")
-    subprocess.run(
-        ['python', 'src/steering/compute_vectors.py',
-         '--model', 'meta-llama/Meta-Llama-3.1-8B-Instruct',
-         '--pairs-path', PAIRS_PATH,
-         '--output', LOCAL_VECTOR_PATH,
-         '--device', 'cuda'],
-        check=True,
-    )
-    shutil.copy2(LOCAL_ANALYSIS_PATH, ANALYSIS_PATH)
-    shutil.copy2(LOCAL_VECTOR_PATH, VECTOR_PATH)
-    meta = torch.load(VECTOR_PATH, weights_only=True)
-    print(f"Vector persisted (selected layer: {meta.get('selected_layer', '?')}).")
-else:
-    meta = torch.load(VECTOR_PATH, weights_only=True)
-    print(f"Vector cached (selected layer: {meta.get('selected_layer', '?')}) — skipping.")
+if not Path(VECTOR_PATH).is_file():
+    raise RuntimeError('Phase 1 is blocked: the confirmed steering artifact is missing.')
+confirmation_path = Path(HELD_OUT_CONFIRMATION_PATH)
+if not confirmation_path.is_file():
+    raise RuntimeError('Phase 1 is blocked: held_out_confirmation.json is missing.')
+confirmation = json.loads(confirmation_path.read_text(encoding='utf-8'))
+if (
+    confirmation.get('kind') != 'phase1_held_out_confirmation'
+    or confirmation.get('held_out_confirmation_passed') is not True
+):
+    raise RuntimeError('Phase 1 is blocked: held-out confirmation has not passed.')
+CONFIRMED_ALPHA = float(confirmation['selected_alpha'])
+print('Held-out confirmed alpha:', CONFIRMED_ALPHA)
 """),
 
     md("""\
@@ -214,7 +212,7 @@ else:
 
 `--skip-existing` lets you re-run this cell across multiple Colab sessions; completed jobs (those with an `exp{N}_summary.json` on Drive) are skipped automatically.
 
-**Default matrix:** 1.2/1.3/1.4 × α∈{0.0, 0.5, 1.0, 1.5, 2.0} × tasks 0–4 × 3 repeats.
+**Locked matrix:** 1.2/1.3/1.4 × the one held-out-confirmed alpha × tasks 0–4 × 3 repeats.
 """),
     code("""\
 import subprocess
@@ -224,7 +222,8 @@ cmd = [
     '--experiments', '1.2,1.3,1.4',
     '--models', 'meta-llama/Meta-Llama-3.1-8B-Instruct',
     '--steering-vector', VECTOR_PATH,
-    '--steering-strengths', '0.0,0.5,1.0,1.5,2.0',
+    '--steering-strengths', str(CONFIRMED_ALPHA),
+    '--held-out-confirmation', HELD_OUT_CONFIRMATION_PATH,
     '--task-indices', '0,1,2,3,4',
     '--repeats', '3',
     '--results-root', SWEEP_RESULTS_ROOT,
@@ -274,7 +273,11 @@ for dirpath, _, filenames in os.walk(SWEEP_RESULTS_ROOT):
 """),
 ]
 
+for index, cell in enumerate(nb.cells, start=1):
+    cell["id"] = f"cell-{index:02d}"
+
+OUTPUT.parent.mkdir(parents=True, exist_ok=True)
 with open(OUTPUT, "w", encoding="utf-8") as f:
     nbformat.write(nb, f)
 
-print(f"Notebook written to {OUTPUT.relative_to(ROOT)}")
+print(f"Notebook written to {OUTPUT}")

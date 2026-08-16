@@ -110,7 +110,7 @@ Use `--limit <N>` only for smoke tests when you intentionally want a smaller sub
 
 ### 4. Calibrate a Treatment Alpha Before Phase 1
 
-Before any multi-agent Phase 1 run, complete the [steering calibration notebook](notebooks/colab_steering_calibration.ipynb) on a CUDA Colab or Linux GPU runtime. You must first accept the gated [SORRY-Bench license](https://huggingface.co/datasets/sorry-bench/sorry-bench) on Hugging Face and provide an `HF_TOKEN` with access.
+Before any Phase 1 run, complete the [steering calibration notebook](notebooks/colab_steering_calibration.ipynb) on a CUDA Colab or Linux GPU runtime. You must first accept the gated [SORRY-Bench license](https://huggingface.co/datasets/sorry-bench/sorry-bench-202503) on Hugging Face and provide an `HF_TOKEN` with access.
 
 The notebook runs the four CLI stages below and persists the private calibration artifacts to Drive:
 
@@ -135,7 +135,9 @@ python experiments/run_steering_calibration.py summarize \
   --scores results/steering_calibration/manual_scores.csv
 ```
 
-Do not use alpha 1.0 as the current default treatment: the existing 1.1 observation at that strength was output collapse. An entropy increase alone is collateral degradation, not evidence of targeted harmfulness steering or a text-mediated cascade. Experiments 1.2–1.4 remain blocked until this calibration selects an alpha.
+Do not use alpha 1.0 as the current default treatment: the existing 1.1 observation at that strength was output collapse. An entropy increase alone is collateral degradation, not evidence of targeted harmfulness steering or a text-mediated cascade. A passing calibration selects only a candidate alpha for a separate held-out confirmation; it does not unlock Phase 1.
+
+All Phase 1 entry surfaces remain blocked until that held-out confirmation passes. The confirmation JSON must identify itself as `phase1_held_out_confirmation`, record `held_out_confirmation_passed: true`, bind the calibration and held-out run digests, and bind the exact artifact SHA-256 and selected alpha. `experiments/run_phase1.py` re-hashes the artifact and checks the alpha before creating a results directory or loading a model. Do not create this record from the pilot summary alone.
 
 ### 5. Serve Clean Agents With vLLM
 
@@ -156,23 +158,26 @@ Practical GPU note:
 
 ### 6. Run Phase 1 Experiments
 
-Experiments 1.2–1.4 are still blocked. Do not use `scripts/run_phase1_local.sh` for the current treatment: it does not forward a steering-strength argument and would silently use the CLI's default alpha 1.0, the observed collapse treatment. After the calibration gate selects an alpha and the direct CLI invocation below has been verified for that selected value, use these templates with the placeholder replaced. They are intentionally non-runnable until then:
+All Phase 1 experiments are still blocked. After a separate held-out confirmation passes, use its exact alpha, artifact, and confirmation record together. The local and sweep wrappers now require and forward these values; they no longer silently launch the default alpha 1.0. These templates are intentionally non-runnable until the placeholders come from passed held-out evidence:
 
 ```bash
-# Replace <calibration-selected-alpha> only after the blinded gate passes.
+# Replace both placeholders only after held-out confirmation passes.
 python experiments/run_phase1.py --experiment 1.2 \
   --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
-  --steering-strength <calibration-selected-alpha> \
+  --steering-strength <held-out-confirmed-alpha> \
+  --held-out-confirmation <held-out-confirmation.json> \
   --clean-api-base http://127.0.0.1:8000/v1
 
 python experiments/run_phase1.py --experiment 1.3 \
   --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
-  --steering-strength <calibration-selected-alpha> \
+  --steering-strength <held-out-confirmed-alpha> \
+  --held-out-confirmation <held-out-confirmation.json> \
   --clean-api-base http://127.0.0.1:8000/v1
 
 python experiments/run_phase1.py --experiment 1.4 \
   --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
-  --steering-strength <calibration-selected-alpha> \
+  --steering-strength <held-out-confirmed-alpha> \
+  --held-out-confirmation <held-out-confirmation.json> \
   --clean-api-base http://127.0.0.1:8000/v1
 ```
 
@@ -191,7 +196,7 @@ For experiments `1.2` to `1.4`, `experiments/run_phase1.py` now requires `--clea
 - `scripts/serve_clean_model.sh`: starts an OpenAI-compatible vLLM server for clean agents
 - `scripts/run_phase1_local.sh`: convenience wrapper for local experiments
 - `notebooks/colab_steering_calibration.ipynb`: gated, blinded 36-response calibration workflow
-- `notebooks/run_experiments.ipynb`: Colab workflow for vector computation and experiment runs
+- `notebooks/run_experiments.ipynb`: legacy Colab vector workflow whose Phase 1 cells require held-out confirmation
 
 ## Outputs
 

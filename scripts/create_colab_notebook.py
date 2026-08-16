@@ -3,10 +3,14 @@ Assembles notebooks/colab_phase1_quickstart.ipynb from scratch.
 Run with: python scripts/create_colab_notebook.py
 """
 
+import argparse
 import pathlib
 import nbformat
 
-OUTPUT = pathlib.Path(__file__).parent.parent / "notebooks" / "colab_phase1_quickstart.ipynb"
+DEFAULT_OUTPUT = pathlib.Path(__file__).parent.parent / "notebooks" / "colab_phase1_quickstart.ipynb"
+parser = argparse.ArgumentParser(description="Generate the Phase 1 quickstart notebook")
+parser.add_argument("--output", type=pathlib.Path, default=DEFAULT_OUTPUT)
+OUTPUT = parser.parse_args().output
 
 # ---------------------------------------------------------------------------
 # Cell helpers
@@ -39,7 +43,7 @@ This notebook runs the full Experiment 1.1 pipeline on a **single A100 GPU**:
 8. Compute the steering vector (~15–20 min on H100/A100)
 9. Run Exp 1.1 (steering validation, ~5–10 min for 3 tasks × 5 alphas)
 10. Plot token entropy vs alpha
-11. (Optional) Run Exp 1.2 if ≥ 70 GB VRAM is available
+11. (Optional) Run Exp 1.2 only after a separate held-out confirmation passes
 
 **Runtime estimates** (A100 40 GB):
 - Steps 1–6: < 5 min
@@ -297,17 +301,36 @@ S9_MD = """\
 Sweeps steering strength α over `[0.0, 0.5, 1.0, 1.5, 2.0]` on 3 HumanEval
 tasks using a locally-loaded steered model (no vLLM server required).
 
+This historical diagnostic is now locked behind the same separate held-out
+confirmation as every other Phase 1 entry surface. Building the vector does not
+authorize this sweep.
+
 **Expected runtime:** ~5–10 min on an A100.
 """
 
 S9_CODE = """\
-import subprocess
+import json, pathlib, subprocess
+
+HELD_OUT_CONFIRMATION_PATH = f'{DRIVE_DIR}/results/held_out_confirmation.json'
+confirmation_path = pathlib.Path(HELD_OUT_CONFIRMATION_PATH)
+if not confirmation_path.exists():
+    raise RuntimeError(
+        'Phase 1 is blocked: complete held-out confirmation and place its JSON at '
+        + HELD_OUT_CONFIRMATION_PATH
+    )
+confirmation = json.loads(confirmation_path.read_text(encoding='utf-8'))
+if (
+    confirmation.get('kind') != 'phase1_held_out_confirmation'
+    or confirmation.get('held_out_confirmation_passed') is not True
+):
+    raise RuntimeError('Phase 1 is blocked: held-out confirmation has not passed.')
 
 subprocess.run(
     [
         'python', 'experiments/run_phase1.py',
         '--experiment', '1.1',
         '--steering-vector', VECTOR_PATH,
+        '--held-out-confirmation', HELD_OUT_CONFIRMATION_PATH,
         '--n-tasks', '3',
         '--alphas', '0.0,0.5,1.0,1.5,2.0',
         '--results-dir', RESULTS_DIR,
@@ -384,16 +407,34 @@ print(f"Plot saved to {PLOT_PATH}")
 # ---------------------------------------------------------------------------
 
 S11_MD = """\
-## 11 · (Optional) Run Experiment 1.2 — two-agent chain
+## 11 · (Locked) Run Experiment 1.2 — two-agent chain
 
 Exp 1.2 loads both the steered model and a clean model locally
 (`--allow-local-clean-models`), which requires ≥ 70 GB VRAM.
 
-This cell is a no-op on A100 40 GB — it will print a skip message.
+This cell remains hard-locked until a **separate held-out confirmation** exists
+on Drive. The 36-response calibration pilot only nominates a candidate alpha;
+it does not unlock this cell. The runner revalidates the confirmation against
+the exact steering artifact and alpha before loading a model.
 """
 
 S11_CODE = """\
-import subprocess, torch
+import json, pathlib, subprocess, torch
+
+HELD_OUT_CONFIRMATION_PATH = f'{DRIVE_DIR}/results/held_out_confirmation.json'
+confirmation_path = pathlib.Path(HELD_OUT_CONFIRMATION_PATH)
+if not confirmation_path.exists():
+    raise RuntimeError(
+        'Phase 1 is blocked: complete held-out confirmation and place its JSON at '
+        + HELD_OUT_CONFIRMATION_PATH
+    )
+confirmation = json.loads(confirmation_path.read_text(encoding='utf-8'))
+if (
+    confirmation.get('kind') != 'phase1_held_out_confirmation'
+    or confirmation.get('held_out_confirmation_passed') is not True
+):
+    raise RuntimeError('Phase 1 is blocked: held-out confirmation has not passed.')
+CONFIRMED_ALPHA = float(confirmation['selected_alpha'])
 
 total_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
 print(f"Available VRAM: {total_vram_gb:.1f} GB")
@@ -408,7 +449,8 @@ else:
             'python', 'experiments/run_phase1.py',
             '--experiment', '1.2',
             '--steering-vector', VECTOR_PATH,
-            '--steering-strength', '1.0',
+            '--steering-strength', str(CONFIRMED_ALPHA),
+            '--held-out-confirmation', HELD_OUT_CONFIRMATION_PATH,
             '--n-tasks', '2',
             '--results-dir', RESULTS_DIR,
             '--allow-local-clean-models',
@@ -436,6 +478,8 @@ cells = [
     md(S10_MD),  code(S10_CODE),
     md(S11_MD),  code(S11_CODE),
 ]
+for index, cell in enumerate(cells, start=1):
+    cell['id'] = f'cell-{index:02d}'
 
 nb = nbformat.v4.new_notebook()
 nb['cells'] = cells

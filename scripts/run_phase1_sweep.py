@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.experiments.phase1_config import PRIMARY_MODEL, parse_csv_list, parse_int_csv
+from src.experiments.phase1_gate import load_held_out_confirmation
 from src.experiments.sweep import SweepConfig, SweepJob, build_sweep_jobs
 
 
@@ -45,7 +46,17 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--experiments", required=True, help="Comma-separated experiments, e.g. 1.2,1.3,1.4")
     parser.add_argument("--models", default=PRIMARY_MODEL, help="Comma-separated model names")
     parser.add_argument("--steering-vector", required=True)
-    parser.add_argument("--steering-strengths", default="1.0", help="Comma-separated steering strengths")
+    parser.add_argument(
+        "--held-out-confirmation",
+        type=Path,
+        required=True,
+        help="Passed held-out confirmation JSON for the exact artifact and selected alpha",
+    )
+    parser.add_argument(
+        "--steering-strengths",
+        required=True,
+        help="Held-out-confirmed steering strength (broad/default sweeps are rejected)",
+    )
     parser.add_argument("--task-names", default=None)
     parser.add_argument("--task-indices", default=None)
     parser.add_argument("--repeats", type=int, default=1)
@@ -94,7 +105,12 @@ def _build_lanes(clean_api_bases: Sequence[str] | None, worker_gpu_sets: Sequenc
     return lanes
 
 
-def build_command(job: SweepJob, lane: SweepLane) -> tuple[list[str], dict[str, str]]:
+def build_command(
+    job: SweepJob,
+    lane: SweepLane,
+    *,
+    held_out_confirmation: str,
+) -> tuple[list[str], dict[str, str]]:
     command = [
         sys.executable,
         str(ROOT / "experiments" / "run_phase1.py"),
@@ -106,6 +122,8 @@ def build_command(job: SweepJob, lane: SweepLane) -> tuple[list[str], dict[str, 
         job.steering_vector,
         "--steering-strength",
         str(job.steering_strength),
+        "--held-out-confirmation",
+        held_out_confirmation,
         "--results-dir",
         job.results_dir,
         "--max-new-tokens",
@@ -126,9 +144,18 @@ def build_command(job: SweepJob, lane: SweepLane) -> tuple[list[str], dict[str, 
     return command, env
 
 
-def _run_lane(lane: SweepLane, jobs: Sequence[SweepJob], dry_run: bool) -> None:
+def _run_lane(
+    lane: SweepLane,
+    jobs: Sequence[SweepJob],
+    dry_run: bool,
+    held_out_confirmation: str,
+) -> None:
     for job in jobs:
-        command, env = build_command(job, lane)
+        command, env = build_command(
+            job,
+            lane,
+            held_out_confirmation=held_out_confirmation,
+        )
         command_text = " ".join(command)
         print(f"[lane {lane.lane_id}] {command_text}")
         if dry_run:
@@ -162,6 +189,12 @@ def main() -> None:
         chat_turn_limit=args.chat_turn_limit,
     )
     jobs = build_sweep_jobs(config)
+    for job in jobs:
+        load_held_out_confirmation(
+            args.held_out_confirmation,
+            steering_vector_path=Path(job.steering_vector),
+            steering_strength=job.steering_strength,
+        )
     if args.skip_existing:
         jobs = filter_completed_jobs(jobs)
     if not jobs:
@@ -172,7 +205,13 @@ def main() -> None:
 
     with ThreadPoolExecutor(max_workers=len(lanes)) as executor:
         futures = [
-            executor.submit(_run_lane, lane, lane_jobs, args.dry_run)
+            executor.submit(
+                _run_lane,
+                lane,
+                lane_jobs,
+                args.dry_run,
+                str(args.held_out_confirmation),
+            )
             for lane, lane_jobs in zip(lanes, sharded_jobs)
             if lane_jobs
         ]

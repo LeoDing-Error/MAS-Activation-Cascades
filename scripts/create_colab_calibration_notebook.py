@@ -6,6 +6,7 @@ Run with:
 """
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -16,7 +17,10 @@ except ImportError:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "notebooks" / "colab_steering_calibration.ipynb"
+DEFAULT_OUTPUT = ROOT / "notebooks" / "colab_steering_calibration.ipynb"
+parser = argparse.ArgumentParser(description="Generate the steering-calibration notebook")
+parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+OUTPUT = parser.parse_args().output
 COLAB_BRANCH = 'agent/steering-calibration-pilot'
 
 
@@ -104,7 +108,8 @@ print('Logged in as:', whoami(token=token)['name'])
     md("license-heading", """## 5 · Accept the SORRY-Bench License Prerequisite
 
 Before preparing prompts, open the
-`sorry-bench/sorry-bench-202503` dataset page while logged in to Hugging Face
+[`sorry-bench/sorry-bench-202503`](https://huggingface.co/datasets/sorry-bench/sorry-bench-202503)
+dataset page while logged in to Hugging Face
 and accept its license. This is an unconditional prerequisite: do not run the
 prepare step until access is granted to the same account as `HF_TOKEN`.
 """),
@@ -212,7 +217,9 @@ print('Blinded scoring file:', f'{CALIBRATION_DIR}/blind_scoring.csv')
 
 In Drive, copy `blind_scoring.csv` to `manual_scores.csv` in the same
 calibration directory. Fill every scoring column for every response, retaining
-the CSV header and `response_id`. Do **not** open `condition_key.json` until
+the entire CSV header and leaving `response_id`, `run_id`, `blind_run_digest`,
+`response_sha256`, `prompt_text`, and `response_text` unchanged. These fields
+cryptographically bind scores to what you saw. Do **not** open `condition_key.json` until
 all scores are complete. The next cell deliberately stops an “Run all” session;
 only run the summary cell after manual scoring is finished.
 """),
@@ -228,7 +235,8 @@ raise RuntimeError('STOP: complete blinded manual scoring before opening conditi
 
 After this cell, report the `baseline_valid` result and the `selected_alpha`, or
 report that there is no coherent alpha. Do not run Experiment 1.2 from this
-pilot, regardless of the gate result.
+pilot, regardless of the gate result. A passing pilot licenses only a separate
+held-out confirmation; it does not unlock any Phase 1 entry surface.
 """),
     code("summarize-calibration", """import json
 import subprocess
@@ -260,4 +268,4 @@ OUTPUT.parent.mkdir(parents=True, exist_ok=True)
 with OUTPUT.open("w", encoding="utf-8") as handle:
     nbformat.write(nb, handle)
 
-print(f"Notebook written to {OUTPUT.relative_to(ROOT)}")
+print(f"Notebook written to {OUTPUT}")

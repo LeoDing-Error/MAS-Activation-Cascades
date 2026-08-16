@@ -6,12 +6,14 @@ import argparse
 import ast
 import csv
 import hashlib
+import io
 import json
 import math
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Mapping, Sequence
 from urllib.error import HTTPError
 from urllib.request import urlopen
@@ -30,6 +32,7 @@ from src.experiments.calibration_protocol import (
     CalibrationPrompt,
     ManualScore,
     build_blinded_rows,
+    response_content_sha256,
     select_sorry_prompts,
     select_xstest_pair,
     summarize_calibration,
@@ -43,9 +46,14 @@ XSTEST_URL = (
 )
 SYSTEM_PROMPT = "You are a helpful assistant."
 MAX_NEW_TOKENS = 256
+MANIFEST_SCHEMA_VERSION = 2
+TA2_INSTRUCTION_COUNT = 520
 PRIVATE_OUTPUT_FILENAMES = (
     "private_prompt_manifest.json",
     "raw_generations.jsonl",
+    "raw_generations.jsonl.unterminated-tail",
+    ".raw_generations.jsonl.repair.tmp",
+    ".raw_generations.jsonl.unterminated-tail.repair.tmp",
     "blind_scoring.csv",
     "condition_key.json",
     "manual_scores.csv",
@@ -64,13 +72,26 @@ def _write_json(path: Path, payload: object) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def _repository_commit() -> str | None:
+def _repository_commit() -> str:
     try:
-        return subprocess.check_output(
+        commit = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, stderr=subprocess.DEVNULL
         ).strip()
-    except (OSError, subprocess.CalledProcessError):
-        return None
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise RuntimeError("Calibration preparation requires a repository commit") from error
+    if not commit:
+        raise RuntimeError("Calibration preparation requires a repository commit")
+    return commit
+
+
+def _canonical_sha256(payload: object) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _prompt_dict(prompt: CalibrationPrompt, *, include_text: bool) -> dict[str, object]:
@@ -111,29 +132,92 @@ def prepare_calibration(
     ta2_instructions: Sequence[str],
     output_dir: Path,
 ) -> PreparationOutputs:
-    """Select six prompts and persist private text plus public provenance."""
+    """Select six prompts and create or compare one immutable prepared run."""
     _ensure_private_output_dir(output_dir)
+    if not isinstance(sorry_revision, str) or not sorry_revision:
+        raise ValueError("SORRY-Bench revision must be a non-empty string")
+    validated_ta2 = _validate_ta2_instructions(ta2_instructions)
     selected = [
-        *select_sorry_prompts(sorry_records, ta2_instructions=ta2_instructions),
+        *select_sorry_prompts(sorry_records, ta2_instructions=validated_ta2),
         *select_xstest_pair(xstest_rows),
     ]
-    private_manifest: dict[str, object] = {
-        "prompts": [_prompt_dict(prompt, include_text=True) for prompt in selected],
-        "sorry_revision": sorry_revision,
-        "xstest_commit": XSTEST_COMMIT,
-    }
-    public_manifest: dict[str, object] = {
+    repository_commit = _repository_commit()
+    ta2_digest = _canonical_sha256(validated_ta2)
+    selected_xstest = [
+        _prompt_dict(prompt, include_text=False)
+        for prompt in selected
+        if prompt.source_id in {"1", "26"} and prompt.source.startswith("xstest@")
+    ]
+    xstest_digest = _canonical_sha256(selected_xstest)
+    prepared_public: dict[str, object] = {
+        "manifest_schema_version": MANIFEST_SCHEMA_VERSION,
         "prompts": [_prompt_dict(prompt, include_text=False) for prompt in selected],
         "sorry_revision": sorry_revision,
         "xstest_commit": XSTEST_COMMIT,
         "xstest_attribution": "XSTest by Rottger et al., CC-BY-4.0",
-        "repository_commit": _repository_commit(),
+        "repository_commit": repository_commit,
+        "ta2_instruction_count": len(validated_ta2),
+        "ta2_instructions_sha256": ta2_digest,
+        "xstest_selected_count": len(selected_xstest),
+        "xstest_selected_sha256": xstest_digest,
         "selection_parameters": _selection_parameters(),
         "generation_parameters": _generation_parameters(),
     }
-    _write_json(output_dir / "private_prompt_manifest.json", private_manifest)
-    _write_json(output_dir / "run_manifest.json", public_manifest)
-    return PreparationOutputs(private_manifest, public_manifest)
+    run_id = _canonical_sha256(prepared_public)
+    private_manifest: dict[str, object] = {
+        "manifest_schema_version": MANIFEST_SCHEMA_VERSION,
+        "run_id": run_id,
+        "prompts": [_prompt_dict(prompt, include_text=True) for prompt in selected],
+        "sorry_revision": sorry_revision,
+        "xstest_commit": XSTEST_COMMIT,
+        "repository_commit": repository_commit,
+        "ta2_instruction_count": len(validated_ta2),
+        "ta2_instructions_sha256": ta2_digest,
+        "xstest_selected_count": len(selected_xstest),
+        "xstest_selected_sha256": xstest_digest,
+    }
+    public_manifest: dict[str, object] = {
+        **prepared_public,
+        "run_id": run_id,
+    }
+    private_path = output_dir / "private_prompt_manifest.json"
+    public_path = output_dir / "run_manifest.json"
+    if private_path.exists() != public_path.exists():
+        raise ValueError("Existing calibration run must contain both prepared manifests")
+    if not private_path.exists():
+        _write_json(private_path, private_manifest)
+        _write_json(public_path, public_manifest)
+        return PreparationOutputs(private_manifest, public_manifest)
+
+    existing_private = _load_json_object(private_path, context="Private prompt manifest")
+    existing_public = _load_json_object(public_path, context="Run manifest")
+    if existing_private != private_manifest:
+        raise ValueError("Prepared provenance does not match the existing calibration run")
+    for key, value in public_manifest.items():
+        if existing_public.get(key) != value:
+            raise ValueError(
+                f"Prepared provenance {key} does not match the existing calibration run"
+            )
+    return PreparationOutputs(existing_private, existing_public)
+
+
+def _load_json_object(path: Path, *, context: str) -> dict[str, object]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"{context} must be valid JSON") from error
+    if not isinstance(payload, dict):
+        raise ValueError(f"{context} must be an object")
+    return payload
+
+
+def _validate_ta2_instructions(instructions: Sequence[str]) -> list[str]:
+    if (
+        len(instructions) != TA2_INSTRUCTION_COUNT
+        or any(not isinstance(instruction, str) or not instruction.strip() for instruction in instructions)
+    ):
+        raise ValueError("Expected exactly 520 valid TA2 construction instructions")
+    return list(instructions)
 
 
 def _sha256_file(path: Path) -> str:
@@ -193,6 +277,8 @@ def _validate_resume_records(
     prompts: Sequence[CalibrationPrompt],
     artifact_sha256: str,
     artifact: SteeringVectorArtifact,
+    run_id: str,
+    repository_commit: str,
     expected_dtype: str | None = None,
 ) -> set[tuple[str, float]]:
     if not path.exists():
@@ -200,7 +286,7 @@ def _validate_resume_records(
     prompt_by_id = {prompt.prompt_id: prompt for prompt in prompts}
     expected_conditions = _expected_conditions(prompts)
     conditions: set[tuple[str, float]] = set()
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_number, line in enumerate(_recoverable_jsonl_lines(path), start=1):
         if not line.strip():
             raise ValueError(f"Invalid resume generation record at line {line_number}: blank lines are not allowed")
         try:
@@ -238,6 +324,10 @@ def _validate_resume_records(
                 raise ValueError("termination_state does not match completion_token_count")
             if record.get("model") != PRIMARY_MODEL or record.get("artifact_sha256") != artifact_sha256:
                 raise ValueError("model or artifact_sha256 does not match this run")
+            if record.get("run_id") != run_id:
+                raise ValueError("run_id does not match the immutable prepared run")
+            if record.get("repository_commit") != repository_commit:
+                raise ValueError("repository_commit does not match the immutable prepared run")
             if record.get("artifact_layer") != artifact.layer or record.get("artifact_vector_norm") != artifact.vector_norm:
                 raise ValueError("artifact provenance does not match this run")
             if record.get("max_new_tokens") != MAX_NEW_TOKENS or record.get("do_sample") is not False:
@@ -254,6 +344,48 @@ def _validate_resume_records(
             raise ValueError(f"Invalid resume generation record at line {line_number}: {error}") from error
         conditions.add(condition)
     return conditions
+
+
+def _recoverable_jsonl_lines(path: Path) -> list[str]:
+    """Return completed JSONL lines, quarantining only a torn final append."""
+    data = path.read_bytes()
+    if not data:
+        return []
+    if not data.endswith(b"\n"):
+        prefix, separator, tail = data.rpartition(b"\n")
+        try:
+            decoded_tail = tail.decode("utf-8")
+            parsed_tail = json.loads(decoded_tail)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            quarantine_path = Path(f"{path}.unterminated-tail")
+            if quarantine_path.exists() and quarantine_path.read_bytes() != tail:
+                raise ValueError(
+                    "A different unterminated JSONL tail is already quarantined"
+                )
+            if not quarantine_path.exists():
+                _atomic_write_bytes(quarantine_path, tail)
+            _atomic_write_bytes(path, prefix + separator if separator else b"")
+            data = prefix + separator if separator else b""
+        else:
+            if not isinstance(parsed_tail, Mapping):
+                raise ValueError("Invalid resume generation record at final line: expected an object")
+            with path.open("ab") as handle:
+                handle.write(b"\n")
+                handle.flush()
+            data += b"\n"
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError("Invalid resume generation record: completed JSONL is not UTF-8") from error
+    return text[:-1].split("\n") if text else []
+
+
+def _atomic_write_bytes(path: Path, content: bytes) -> None:
+    temporary_path = path.with_name(f".{path.name}.repair.tmp")
+    with temporary_path.open("wb") as handle:
+        handle.write(content)
+        handle.flush()
+    temporary_path.replace(path)
 
 
 def _append_jsonl(path: Path, record: Mapping[str, object]) -> None:
@@ -286,71 +418,151 @@ def _selection_parameters() -> dict[str, object]:
 
 def _private_manifest_provenance(
     manifest: Mapping[str, object], prompts: Sequence[CalibrationPrompt],
-) -> dict[str, str]:
+) -> dict[str, object]:
+    if manifest.get("manifest_schema_version") != MANIFEST_SCHEMA_VERSION:
+        raise ValueError("Private prompt manifest schema version does not match this runner")
+    run_id = _required_sha256(manifest, "run_id", context="Private prompt manifest")
+    repository_commit = _required_string(
+        manifest, "repository_commit", context="Private prompt manifest"
+    )
     sorry_revision = _required_string(manifest, "sorry_revision", context="Private prompt manifest")
     xstest_commit = _required_string(manifest, "xstest_commit", context="Private prompt manifest")
     if xstest_commit != XSTEST_COMMIT:
         raise ValueError("Private prompt manifest xstest_commit does not match the pinned commit")
+    if manifest.get("ta2_instruction_count") != TA2_INSTRUCTION_COUNT:
+        raise ValueError("Private prompt manifest must record exactly 520 TA2 instructions")
+    ta2_digest = _required_sha256(
+        manifest, "ta2_instructions_sha256", context="Private prompt manifest"
+    )
+    if manifest.get("xstest_selected_count") != 2:
+        raise ValueError("Private prompt manifest must record exactly two XSTest controls")
+    xstest_digest = _required_sha256(
+        manifest, "xstest_selected_sha256", context="Private prompt manifest"
+    )
     for prompt in prompts:
         if prompt.prompt_id.startswith("sorry-"):
             if prompt.source != "sorry_bench_202503":
                 raise ValueError("Private SORRY-Bench prompt source is invalid")
         elif prompt.source != f"xstest@{xstest_commit}":
             raise ValueError("Private XSTest prompt source does not match xstest_commit")
-    return {"sorry_revision": sorry_revision, "xstest_commit": xstest_commit}
+    selected_xstest = [
+        _prompt_dict(prompt, include_text=False)
+        for prompt in prompts
+        if prompt.source.startswith("xstest@")
+    ]
+    if _canonical_sha256(selected_xstest) != xstest_digest:
+        raise ValueError("Private prompt manifest XSTest digest does not match its controls")
+    return {
+        "manifest_schema_version": MANIFEST_SCHEMA_VERSION,
+        "run_id": run_id,
+        "repository_commit": repository_commit,
+        "sorry_revision": sorry_revision,
+        "xstest_commit": xstest_commit,
+        "ta2_instruction_count": TA2_INSTRUCTION_COUNT,
+        "ta2_instructions_sha256": ta2_digest,
+        "xstest_selected_count": 2,
+        "xstest_selected_sha256": xstest_digest,
+    }
 
 
-def _record_artifact_provenance(
-    *, output_dir: Path, prompts: Sequence[CalibrationPrompt], private_provenance: Mapping[str, str], artifact_sha256: str,
-    artifact: SteeringVectorArtifact,
+def _required_sha256(record: Mapping[str, object], key: str, *, context: str) -> str:
+    value = _required_string(record, key, context=context)
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+        raise ValueError(f"{context} {key} must be a SHA-256 digest")
+    return value
+
+
+def _prepared_public_fields(
+    prompts: Sequence[CalibrationPrompt], private_provenance: Mapping[str, object],
 ) -> dict[str, object]:
-    """Validate public run provenance, then persist the artifact before model loading."""
-    manifest_path = output_dir / "run_manifest.json"
-    expected_prompts = [_prompt_dict(prompt, include_text=False) for prompt in prompts]
-    required_base = {
-        "prompts": expected_prompts,
+    return {
+        "manifest_schema_version": MANIFEST_SCHEMA_VERSION,
+        "run_id": private_provenance["run_id"],
+        "prompts": [_prompt_dict(prompt, include_text=False) for prompt in prompts],
         "sorry_revision": private_provenance["sorry_revision"],
         "xstest_commit": private_provenance["xstest_commit"],
         "xstest_attribution": "XSTest by Rottger et al., CC-BY-4.0",
+        "repository_commit": private_provenance["repository_commit"],
+        "ta2_instruction_count": private_provenance["ta2_instruction_count"],
+        "ta2_instructions_sha256": private_provenance["ta2_instructions_sha256"],
+        "xstest_selected_count": private_provenance["xstest_selected_count"],
+        "xstest_selected_sha256": private_provenance["xstest_selected_sha256"],
         "selection_parameters": _selection_parameters(),
         "generation_parameters": _generation_parameters(),
     }
-    if manifest_path.exists():
-        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            raise ValueError("Run manifest must be an object")
-        for key, value in required_base.items():
-            if key not in payload:
-                raise ValueError(f"Run manifest {key} is required")
-            if payload[key] != value:
-                raise ValueError(f"Run manifest {key} does not match the private manifest or this run")
-        if "repository_commit" not in payload:
-            raise ValueError("Run manifest repository_commit is required")
-        repository_commit = payload["repository_commit"]
-        if repository_commit is not None and (not isinstance(repository_commit, str) or not repository_commit):
-            raise ValueError("Run manifest repository_commit must be a non-empty string or null")
-    else:
-        payload = {
-            **required_base,
-            "repository_commit": _repository_commit(),
-        }
+
+
+def _load_prepared_run_manifest(
+    *, output_dir: Path, prompts: Sequence[CalibrationPrompt], private_provenance: Mapping[str, object],
+) -> dict[str, object]:
+    manifest_path = output_dir / "run_manifest.json"
+    if not manifest_path.exists():
+        raise ValueError("Run manifest is required; run prepare in this output directory first")
+    payload = _load_json_object(manifest_path, context="Run manifest")
+    required = _prepared_public_fields(prompts, private_provenance)
+    for key, value in required.items():
+        if payload.get(key) != value:
+            raise ValueError(f"Run manifest {key} does not match the private manifest or this run")
+    if _repository_commit() != required["repository_commit"]:
+        raise ValueError("Run manifest does not match the current repository commit")
+    prepared_without_run_id = {key: value for key, value in required.items() if key != "run_id"}
+    if _canonical_sha256(prepared_without_run_id) != required["run_id"]:
+        raise ValueError("Run manifest run_id does not match immutable prepared provenance")
+    return payload
+
+
+def _record_artifact_provenance(
+    *, output_dir: Path, prompts: Sequence[CalibrationPrompt], private_provenance: Mapping[str, object], artifact_sha256: str,
+    artifact: SteeringVectorArtifact,
+) -> dict[str, object]:
+    """Bind the TOFU artifact and leave a retryable pre-backend state."""
+    manifest_path = output_dir / "run_manifest.json"
+    payload = _load_prepared_run_manifest(
+        output_dir=output_dir,
+        prompts=prompts,
+        private_provenance=private_provenance,
+    )
     artifact_fields = {
         "artifact_sha256": artifact_sha256,
         "artifact_model": artifact.model_name,
         "artifact_layer": artifact.layer,
         "artifact_vector_norm": artifact.vector_norm,
     }
-    existing_artifact_fields = {key for key in artifact_fields if key in payload}
-    if existing_artifact_fields and existing_artifact_fields != set(artifact_fields):
+    existing_artifact_fields = {key for key in (*artifact_fields, "artifact_state") if key in payload}
+    if existing_artifact_fields and existing_artifact_fields != {*artifact_fields, "artifact_state"}:
         raise ValueError("Run manifest artifact provenance fields must be complete")
-    if existing_artifact_fields and not isinstance(payload.get("dtype"), str):
-        raise ValueError("Run manifest dtype is required after artifact provenance is recorded")
     for key, value in artifact_fields.items():
         if key in payload and payload[key] != value:
             raise ValueError(f"Run manifest {key} does not match this run")
         payload[key] = value
-    _write_json(manifest_path, payload)
+    state = payload.get("artifact_state")
+    if state is None:
+        payload["artifact_state"] = "pending_backend"
+        payload.pop("dtype", None)
+        _write_json(manifest_path, payload)
+    elif state == "pending_backend":
+        if "dtype" in payload:
+            raise ValueError("Pending artifact state must not contain dtype")
+    elif state == "ready":
+        _required_string(payload, "dtype", context="Ready run manifest")
+    else:
+        raise ValueError("Run manifest artifact_state must be pending_backend or ready")
     return payload
+
+
+def _seal_artifact_dtype(output_dir: Path, run_manifest: dict[str, object], dtype: str) -> dict[str, object]:
+    manifest_path = output_dir / "run_manifest.json"
+    state = run_manifest.get("artifact_state")
+    if state == "ready":
+        if run_manifest.get("dtype") != dtype:
+            raise ValueError("Run manifest dtype does not match this run")
+        return run_manifest
+    if state != "pending_backend":
+        raise ValueError("Run manifest artifact is not in a sealable state")
+    run_manifest["dtype"] = dtype
+    run_manifest["artifact_state"] = "ready"
+    _write_json(manifest_path, run_manifest)
+    return run_manifest
 
 
 def generate_calibration(
@@ -374,10 +586,17 @@ def generate_calibration(
         artifact_sha256=artifact_sha256, artifact=artifact,
     )
     records_path = output_dir / "raw_generations.jsonl"
+    run_id = _required_sha256(run_manifest, "run_id", context="Run manifest")
+    repository_commit = _required_string(
+        run_manifest, "repository_commit", context="Run manifest"
+    )
     existing = _validate_resume_records(
         records_path, prompts=prompts, artifact_sha256=artifact_sha256, artifact=artifact,
+        run_id=run_id, repository_commit=repository_commit,
         expected_dtype=run_manifest.get("dtype") if isinstance(run_manifest.get("dtype"), str) else None,
     )
+    if existing and run_manifest["artifact_state"] != "ready":
+        raise ValueError("Generation records cannot exist while artifact state is pending_backend")
 
     backend = backend_factory(
         model_name=PRIMARY_MODEL,
@@ -390,12 +609,10 @@ def generate_calibration(
         top_p=1.0,
     )
     dtype = str(getattr(backend, "torch_dtype", "unknown"))
-    if "dtype" in run_manifest and run_manifest["dtype"] != dtype:
-        raise ValueError("Run manifest dtype does not match this run")
-    run_manifest["dtype"] = dtype
-    _write_json(output_dir / "run_manifest.json", run_manifest)
+    run_manifest = _seal_artifact_dtype(output_dir, run_manifest, dtype)
     _validate_resume_records(
         records_path, prompts=prompts, artifact_sha256=artifact_sha256, artifact=artifact,
+        run_id=run_id, repository_commit=repository_commit,
         expected_dtype=dtype,
     )
     for alpha in ALPHAS:
@@ -425,6 +642,8 @@ def generate_calibration(
                 "truncated": result.completion_token_count == MAX_NEW_TOKENS,
                 "termination_state": "length" if result.completion_token_count == MAX_NEW_TOKENS else "stop",
                 "model": PRIMARY_MODEL,
+                "run_id": run_id,
+                "repository_commit": repository_commit,
                 "dtype": dtype,
                 "artifact_sha256": artifact_sha256,
                 "artifact_layer": artifact.layer,
@@ -440,6 +659,7 @@ def generate_calibration(
             existing.add(condition)
     final_conditions = _validate_resume_records(
         records_path, prompts=prompts, artifact_sha256=artifact_sha256, artifact=artifact,
+        run_id=run_id, repository_commit=repository_commit,
         expected_dtype=dtype,
     )
     if final_conditions != _expected_conditions(prompts):
@@ -448,19 +668,78 @@ def generate_calibration(
 
 def blind_calibration(*, output_dir: Path) -> None:
     _ensure_private_output_dir(output_dir)
+    private_manifest = _load_json_object(
+        output_dir / "private_prompt_manifest.json", context="Private prompt manifest"
+    )
+    prompts = _manifest_prompts(private_manifest)
+    private_provenance = _private_manifest_provenance(private_manifest, prompts)
+    run_manifest = _load_prepared_run_manifest(
+        output_dir=output_dir,
+        prompts=prompts,
+        private_provenance=private_provenance,
+    )
+    if run_manifest.get("artifact_state") != "ready":
+        raise ValueError("Blinding requires a ready artifact and sealed dtype")
+    artifact_sha256 = _required_sha256(
+        run_manifest, "artifact_sha256", context="Run manifest"
+    )
+    artifact = SimpleNamespace(
+        layer=run_manifest.get("artifact_layer"),
+        vector_norm=run_manifest.get("artifact_vector_norm"),
+    )
+    dtype = _required_string(run_manifest, "dtype", context="Run manifest")
+    run_id = _required_sha256(run_manifest, "run_id", context="Run manifest")
+    repository_commit = _required_string(
+        run_manifest, "repository_commit", context="Run manifest"
+    )
     records_path = output_dir / "raw_generations.jsonl"
-    records = [json.loads(line) for line in records_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    conditions = _validate_resume_records(
+        records_path,
+        prompts=prompts,
+        artifact_sha256=artifact_sha256,
+        artifact=artifact,
+        run_id=run_id,
+        repository_commit=repository_commit,
+        expected_dtype=dtype,
+    )
+    if conditions != _expected_conditions(prompts):
+        raise ValueError("Blinding requires the complete 36-record calibration grid")
+    records = [json.loads(line) for line in _recoverable_jsonl_lines(records_path)]
     rows, key = build_blinded_rows(records)
     output_dir.mkdir(parents=True, exist_ok=True)
     fields = [
-        "response_id", "prompt_text", "response_text", "refusal_compliance", "coherence",
-        "relevance", "repetitive", "truncated",
+        "response_id", "run_id", "blind_run_digest", "response_sha256",
+        "prompt_text", "response_text", "refusal_compliance", "coherence", "relevance",
+        "repetitive", "truncated",
     ]
-    with (output_dir / "blind_scoring.csv").open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields)
-        writer.writeheader()
-        writer.writerows(rows)
-    _write_json(output_dir / "condition_key.json", key)
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=fields, lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(rows)
+    _write_bytes_compare(
+        output_dir / "blind_scoring.csv",
+        buffer.getvalue().encode("utf-8"),
+        context="Blinded scoring file",
+    )
+    _write_json_compare(
+        output_dir / "condition_key.json",
+        key,
+        context="Condition key",
+    )
+
+
+def _write_bytes_compare(path: Path, content: bytes, *, context: str) -> None:
+    if path.exists():
+        if path.read_bytes() != content:
+            raise ValueError(f"{context} does not match the current immutable run")
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+
+
+def _write_json_compare(path: Path, payload: object, *, context: str) -> None:
+    content = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
+    _write_bytes_compare(path, content, context=context)
 
 
 def _parse_boolean(value: str, field: str) -> bool:
@@ -478,8 +757,16 @@ def _load_manual_scores(path: Path) -> list[ManualScore]:
     scores: list[ManualScore] = []
     for row in rows:
         try:
+            prompt_text = row["prompt_text"]
+            response_text = row["response_text"]
+            response_sha256 = row["response_sha256"]
+            if response_content_sha256(prompt_text, response_text) != response_sha256:
+                raise ValueError("response hash does not match the blinded content")
             scores.append(ManualScore(
                 response_id=row["response_id"],
+                run_id=row["run_id"],
+                blind_run_digest=row["blind_run_digest"],
+                response_sha256=response_sha256,
                 refusal_compliance=int(row["refusal_compliance"]),
                 coherence=int(row["coherence"]),
                 relevance=int(row["relevance"]),
@@ -496,8 +783,28 @@ def summarize_calibration_run(*, output_dir: Path, scores_path: Path) -> dict[st
     key = json.loads((output_dir / "condition_key.json").read_text(encoding="utf-8"))
     if not isinstance(key, dict):
         raise ValueError("Condition key must be an object")
+    run_ids = {
+        condition.get("run_id") for condition in key.values() if isinstance(condition, Mapping)
+    }
+    blind_digests = {
+        condition.get("blind_run_digest")
+        for condition in key.values()
+        if isinstance(condition, Mapping)
+    }
+    if len(run_ids) != 1 or len(blind_digests) != 1:
+        raise ValueError("Condition key must bind one immutable run and blind-run digest")
+    run_manifest = _load_json_object(output_dir / "run_manifest.json", context="Run manifest")
+    run_id = _required_sha256(run_manifest, "run_id", context="Run manifest")
+    if run_ids != {run_id}:
+        raise ValueError("Condition key run_id does not match the current run manifest")
+    blind_run_digest = next(iter(blind_digests))
+    if not isinstance(blind_run_digest, str):
+        raise ValueError("Condition key blind-run digest is invalid")
     summary = summarize_calibration((_load_manual_scores(scores_path), key))
     payload = {
+        "run_id": run_id,
+        "blind_run_digest": blind_run_digest,
+        "manual_scores_sha256": _sha256_file(scores_path),
         "baseline_valid": summary.baseline_valid,
         "baseline_reasons": list(summary.baseline_reasons),
         "alpha_results": {str(alpha): asdict(result) for alpha, result in summary.alpha_results.items()},
@@ -544,10 +851,14 @@ def _load_ta2_instructions(path: Path) -> list[str]:
         raise ValueError("TA2 pairs payload must contain a pairs list")
     instructions: list[str] = []
     for pair in pairs:
-        if not isinstance(pair, Mapping) or not isinstance(pair.get("instruction"), str):
+        if (
+            not isinstance(pair, Mapping)
+            or not isinstance(pair.get("instruction"), str)
+            or not pair["instruction"].strip()
+        ):
             raise ValueError("Every TA2 pair must contain an instruction")
         instructions.append(pair["instruction"])
-    return instructions
+    return _validate_ta2_instructions(instructions)
 
 
 def _download_sorry_records() -> tuple[list[dict[str, str]], str]:

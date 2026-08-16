@@ -8,7 +8,7 @@ This document describes the experimental infrastructure for testing whether acti
 
 **Status:** A local 8B TA² artifact now exists at `steering_vectors/harmfulness_llama3_8b.pt`, built from 520 construction pairs. Its selected layer is 25 and its vector norm is approximately 25.557. The artifact remains intentionally untracked; it is available locally, not as a committed project asset.
 
-Experiment 1.1 produced 15 records. At α=0, outputs were coherent; at α=0.5, one of three coding tasks degraded; and at α≥1.0, all tested outputs collapsed. Token entropy rose monotonically, but this is evidence of collateral degradation, not targeted harmfulness steering and not cascade evidence. The immediate gate is the 36-response, blinded manual-scoring calibration pilot. Experiments 1.2–1.4 remain blocked until that gate selects a candidate treatment alpha.
+Experiment 1.1 produced 15 records. At α=0, outputs were coherent; at α=0.5, one of three coding tasks degraded; and at α≥1.0, all tested outputs collapsed. Token entropy rose monotonically, but this is evidence of collateral degradation, not targeted harmfulness steering and not cascade evidence. The immediate gate is the 36-response, blinded manual-scoring calibration pilot. A passing pilot nominates only a candidate alpha for a separate held-out confirmation. Every Phase 1 entry surface remains blocked until that confirmation passes and binds the exact artifact and alpha.
 
 ---
 
@@ -145,7 +145,7 @@ Post-hoc analysis of experiment results:
 
 **Setup:**
 ```
-A₀ (steered, calibration-selected α) → A₁ (clean)
+A₀ (steered, held-out-confirmed α) → A₁ (clean)
     implementer          reviewer
 ```
 
@@ -161,7 +161,7 @@ A₀ (steered, calibration-selected α) → A₁ (clean)
 
 **Setup:**
 ```
-A₀ (steered, calibration-selected α) → A₁ (clean) → A₂ (clean)
+A₀ (steered, held-out-confirmed α) → A₁ (clean) → A₂ (clean)
    planner      implementer   reviewer
 ```
 
@@ -178,7 +178,7 @@ A₀ (steered, calibration-selected α) → A₁ (clean) → A₂ (clean)
 ```
         A₁ (frontend)
        ↗
-A₀ (hub, calibration-selected α) → A₂ (backend)
+A₀ (hub, held-out-confirmed α) → A₂ (backend)
        ↘
         A₃ (testing)
 ```
@@ -243,40 +243,45 @@ python src/steering/compute_vectors.py \
 # Experiment 1.1: Validate steering
 python experiments/run_phase1.py --experiment 1.1 \
     --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
+    --held-out-confirmation <held-out-confirmation.json> \
     --n-tasks 10
 
-# The following 1.2–1.4 commands are templates, not runnable commands, until
-# the calibration gate has selected an alpha. Replace the placeholder only with
-# that selected alpha; do not rely on the CLI default.
+# These commands are templates, not runnable commands, until a separate
+# held-out confirmation has passed. Use only the artifact and alpha bound into
+# that confirmation; a calibration summary is insufficient.
 
 # Experiment 1.2: Two-agent cascade
 python experiments/run_phase1.py --experiment 1.2 \
     --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
-    --steering-strength <calibration-selected-alpha> \
+    --steering-strength <held-out-confirmed-alpha> \
+    --held-out-confirmation <held-out-confirmation.json> \
     --task-names is_prime,reverse_string \
     --clean-api-base http://127.0.0.1:8000/v1
 
 # Experiment 1.3: Three-agent attenuation
 python experiments/run_phase1.py --experiment 1.3 \
     --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
-    --steering-strength <calibration-selected-alpha> \
+    --steering-strength <held-out-confirmed-alpha> \
+    --held-out-confirmation <held-out-confirmation.json> \
     --task-indices 1,4,7 \
     --clean-api-base http://127.0.0.1:8000/v1
 
 # Experiment 1.4: Star topology breadth
 python experiments/run_phase1.py --experiment 1.4 \
     --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
-    --steering-strength <calibration-selected-alpha> \
+    --steering-strength <held-out-confirmed-alpha> \
+    --held-out-confirmation <held-out-confirmation.json> \
     --n-tasks 3 \
     --clean-api-base http://127.0.0.1:8000/v1
 
-# Parallel sweep template: runnable only after substituting the calibration-selected alpha.
+# Parallel sweep template: runnable only with passed held-out evidence.
 ./scripts/run_phase1_sweep.sh \
     --experiments 1.2,1.3,1.4 \
     --models meta-llama/Meta-Llama-3.1-8B-Instruct \
     --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
     --task-indices 0,1,2,3,4 \
-    --steering-strengths <calibration-selected-alpha> \
+    --steering-strengths <held-out-confirmed-alpha> \
+    --held-out-confirmation <held-out-confirmation.json> \
     --repeats 3 \
     --clean-api-bases http://127.0.0.1:8000/v1,http://127.0.0.1:8001/v1 \
     --worker-gpu-sets '4;5'
@@ -323,7 +328,7 @@ Example planning envelope for a moderately heavy 8B sweep:
 
 - Task set: 5 tasks
 - Experiments: `1.2`, `1.3`, `1.4`
-- Steering strength: the calibration-selected alpha only
+- Steering strength: the held-out-confirmed alpha only
 - Repeats: `3`
 - Jobs after calibration: `3 experiments × 1 selected alpha × 3 repeats = 9 jobs`
 - Per-job task workload: `5 tasks`
@@ -372,8 +377,8 @@ For multi-task runs of experiments `1.2` to `1.4`, switch the example paths to a
 
 **If steering changes entropy or MSP:**
 - Do not treat that shift as a harmfulness or cascade result by itself.
-- Run the 36-response calibration pilot and use only an alpha that passes its blinded manual-scoring gate.
-- Experiments 1.2–1.4 remain blocked until calibration selects a candidate alpha.
+- Run the 36-response calibration pilot; a passing alpha is only a candidate for held-out confirmation.
+- All Phase 1 experiments remain blocked until held-out confirmation passes for the exact artifact and alpha.
 
 ### After Experiment 1.2
 

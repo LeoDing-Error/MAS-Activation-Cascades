@@ -10,7 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from src.experiments.calibration_protocol import ALPHAS, SORRY_DOMAINS, select_sorry_prompts, select_xstest_pair
+from src.experiments.calibration_protocol import (
+    ALPHAS,
+    SORRY_DOMAINS,
+    XSTEST_COMMIT,
+    select_sorry_prompts,
+    select_xstest_pair,
+)
 from src.experiments.phase1_config import PRIMARY_MODEL
 
 
@@ -41,8 +47,17 @@ class FakeSteeringVectorArtifact:
 
 
 @pytest.fixture(autouse=True)
-def _provide_local_backend_shapes(monkeypatch: pytest.MonkeyPatch) -> None:
+def _provide_local_backend_shapes() -> None:
     """Keep CLI tests independent of collection-time backend and torch fakes."""
+    module_names = (
+        "src.backends",
+        "src.backends.steering_backend",
+        "src.metrics",
+        "src.metrics.uncertainty",
+        "experiments.run_steering_calibration",
+    )
+    missing = object()
+    previous = {name: sys.modules.get(name, missing) for name in module_names}
     backend_package = ModuleType("src.backends")
     backend_package.__path__ = []
     backend_module = ModuleType("src.backends.steering_backend")
@@ -57,11 +72,19 @@ def _provide_local_backend_shapes(monkeypatch: pytest.MonkeyPatch) -> None:
         mean_token_entropy=None, normalized_sequence_msp=None,
     )
     metrics_package.uncertainty = uncertainty_module
-    monkeypatch.setitem(sys.modules, "src.backends", backend_package)
-    monkeypatch.setitem(sys.modules, "src.backends.steering_backend", backend_module)
-    monkeypatch.setitem(sys.modules, "src.metrics", metrics_package)
-    monkeypatch.setitem(sys.modules, "src.metrics.uncertainty", uncertainty_module)
+    sys.modules["src.backends"] = backend_package
+    sys.modules["src.backends.steering_backend"] = backend_module
+    sys.modules["src.metrics"] = metrics_package
+    sys.modules["src.metrics.uncertainty"] = uncertainty_module
     sys.modules.pop("experiments.run_steering_calibration", None)
+    try:
+        yield
+    finally:
+        for name, module in previous.items():
+            if module is missing:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
 
 
 def make_sorry_records() -> list[dict[str, str]]:
@@ -78,33 +101,35 @@ def make_sorry_records() -> list[dict[str, str]]:
 
 def make_xstest_rows() -> list[dict[str, str]]:
     return [
-        {"source_id": "1", "label": "safe", "text": "Safe XSTest prompt"},
-        {"source_id": "26", "label": "unsafe", "text": "Unsafe XSTest prompt"},
+        {
+            "source_id": "1",
+            "label": "safe",
+            "text": "Safe XSTest prompt",
+            "source_revision": XSTEST_COMMIT,
+        },
+        {
+            "source_id": "26",
+            "label": "unsafe",
+            "text": "Unsafe XSTest prompt",
+            "source_revision": XSTEST_COMMIT,
+        },
     ]
 
 
-def make_private_manifest() -> dict[str, object]:
-    prompts = [
-        *select_sorry_prompts(make_sorry_records(), ta2_instructions=[]),
-        *select_xstest_pair(make_xstest_rows()),
-    ]
-    return {
-        "sorry_revision": "sorry-sha",
-        "xstest_commit": "d7bb5bd738c1fcbc36edd83d5e7d1b71a3e2d84d",
-        "prompts": [
-            {
-                "prompt_id": prompt.prompt_id,
-                "source": prompt.source,
-                "source_id": prompt.source_id,
-                "category": prompt.category,
-                "high_level_domain": prompt.high_level_domain,
-                "expected_label": prompt.expected_label,
-                "text": prompt.text,
-                "prompt_sha256": prompt.prompt_sha256,
-            }
-            for prompt in prompts
-        ]
-    }
+def make_ta2_instructions(count: int = 520) -> list[str]:
+    return [f"private TA2 construction instruction {index:04d}" for index in range(count)]
+
+
+def make_private_manifest(output_dir: Path) -> dict[str, object]:
+    from experiments.run_steering_calibration import prepare_calibration
+
+    return prepare_calibration(
+        sorry_records=make_sorry_records(),
+        sorry_revision="sorry-sha",
+        xstest_rows=make_xstest_rows(),
+        ta2_instructions=make_ta2_instructions(),
+        output_dir=output_dir,
+    ).private_manifest
 
 
 def read_jsonl(path: Path) -> list[dict[str, object]]:
@@ -112,7 +137,18 @@ def read_jsonl(path: Path) -> list[dict[str, object]]:
 
 
 def write_existing_record(path: Path, *, prompt_id: str, alpha: float, steering_path: Path) -> None:
-    manifest = make_private_manifest()
+    manifest = make_private_manifest(path.parent)
+    public_path = path.parent / "run_manifest.json"
+    public = json.loads(public_path.read_text(encoding="utf-8"))
+    public.update({
+        "artifact_state": "ready",
+        "artifact_sha256": hashlib.sha256(steering_path.read_bytes()).hexdigest(),
+        "artifact_model": PRIMARY_MODEL,
+        "artifact_layer": 25,
+        "artifact_vector_norm": 2.0,
+        "dtype": "unknown",
+    })
+    public_path.write_text(json.dumps(public, indent=2, sort_keys=True), encoding="utf-8")
     prompt = next(item for item in manifest["prompts"] if item["prompt_id"] == prompt_id)
     path.write_text(
         json.dumps({
@@ -130,6 +166,8 @@ def write_existing_record(path: Path, *, prompt_id: str, alpha: float, steering_
             "truncated": False,
             "termination_state": "stop",
             "model": PRIMARY_MODEL,
+            "run_id": public["run_id"],
+            "repository_commit": public["repository_commit"],
             "dtype": "unknown",
             "artifact_sha256": hashlib.sha256(steering_path.read_bytes()).hexdigest(),
             "artifact_layer": 25,
@@ -192,15 +230,89 @@ def test_prepare_writes_private_prompts_and_public_provenance(tmp_path: Path) ->
         sorry_records=make_sorry_records(),
         sorry_revision="sorry-sha",
         xstest_rows=make_xstest_rows(),
-        ta2_instructions=["training-only prompt"],
+        ta2_instructions=make_ta2_instructions(),
         output_dir=tmp_path,
     )
 
     assert len(outputs.private_manifest["prompts"]) == 6
     assert "text" not in outputs.public_manifest["prompts"][0]
     assert outputs.public_manifest["sorry_revision"] == "sorry-sha"
+    assert outputs.private_manifest["run_id"] == outputs.public_manifest["run_id"]
+    assert len(str(outputs.public_manifest["run_id"])) == 64
+    assert outputs.public_manifest["ta2_instruction_count"] == 520
+    assert len(str(outputs.public_manifest["ta2_instructions_sha256"])) == 64
+    assert outputs.public_manifest["xstest_selected_count"] == 2
+    assert len(str(outputs.public_manifest["xstest_selected_sha256"])) == 64
     assert (tmp_path / "private_prompt_manifest.json").exists()
     assert (tmp_path / "run_manifest.json").exists()
+
+
+def test_prepare_compares_existing_manifests_without_erasing_artifact_state(tmp_path: Path) -> None:
+    from experiments.run_steering_calibration import prepare_calibration
+
+    kwargs = {
+        "sorry_records": make_sorry_records(),
+        "sorry_revision": "sorry-sha",
+        "xstest_rows": make_xstest_rows(),
+        "ta2_instructions": make_ta2_instructions(),
+        "output_dir": tmp_path,
+    }
+    prepare_calibration(**kwargs)
+    manifest_path = tmp_path / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.update({
+        "artifact_state": "ready",
+        "artifact_sha256": "b" * 64,
+        "artifact_model": PRIMARY_MODEL,
+        "artifact_layer": 25,
+        "artifact_vector_norm": 2.0,
+        "dtype": "torch.bfloat16",
+    })
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    before = manifest_path.read_bytes()
+
+    outputs = prepare_calibration(**kwargs)
+
+    assert manifest_path.read_bytes() == before
+    assert outputs.public_manifest["artifact_state"] == "ready"
+
+
+def test_prepare_rejects_changed_provenance_in_an_existing_output_dir(tmp_path: Path) -> None:
+    from experiments.run_steering_calibration import prepare_calibration
+
+    prepare_calibration(
+        sorry_records=make_sorry_records(),
+        sorry_revision="sorry-sha",
+        xstest_rows=make_xstest_rows(),
+        ta2_instructions=make_ta2_instructions(),
+        output_dir=tmp_path,
+    )
+    before = (tmp_path / "run_manifest.json").read_bytes()
+
+    with pytest.raises(ValueError, match="existing calibration run"):
+        prepare_calibration(
+            sorry_records=make_sorry_records(),
+            sorry_revision="different-sorry-sha",
+            xstest_rows=make_xstest_rows(),
+            ta2_instructions=make_ta2_instructions(),
+            output_dir=tmp_path,
+        )
+
+    assert (tmp_path / "run_manifest.json").read_bytes() == before
+
+
+def test_prepare_requires_exactly_520_valid_ta2_instructions(tmp_path: Path) -> None:
+    from experiments.run_steering_calibration import prepare_calibration
+
+    for instructions in (make_ta2_instructions(519), [*make_ta2_instructions(519), ""]):
+        with pytest.raises(ValueError, match="exactly 520 valid TA2"):
+            prepare_calibration(
+                sorry_records=make_sorry_records(),
+                sorry_revision="sorry-sha",
+                xstest_rows=make_xstest_rows(),
+                ta2_instructions=instructions,
+                output_dir=tmp_path,
+            )
 
 
 def test_generate_is_resumable_and_reuses_one_backend(tmp_path: Path) -> None:
@@ -215,7 +327,7 @@ def test_generate_is_resumable_and_reuses_one_backend(tmp_path: Path) -> None:
     )
 
     generate_calibration(
-        private_manifest=make_private_manifest(),
+        private_manifest=make_private_manifest(tmp_path),
         steering_path=artifact_path,
         output_dir=tmp_path,
         backend_factory=factory,
@@ -243,6 +355,9 @@ def test_generate_is_resumable_and_reuses_one_backend(tmp_path: Path) -> None:
     assert generated["truncated"] is False
     assert generated["termination_state"] == "stop"
     assert generated["artifact_sha256"] == hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+    manifest = json.loads((tmp_path / "run_manifest.json").read_text(encoding="utf-8"))
+    assert generated["run_id"] == manifest["run_id"]
+    assert generated["repository_commit"] == manifest["repository_commit"]
     assert generated["mean_token_entropy"] is None
     assert generated["normalized_sequence_msp"] is None
 
@@ -253,7 +368,7 @@ def test_generate_records_artifact_sha_in_run_manifest_before_factory_use(tmp_pa
     artifact_path = tmp_path / "vector.pt"
     write_artifact(artifact_path)
     generate_calibration(
-        private_manifest=make_private_manifest(),
+        private_manifest=make_private_manifest(tmp_path),
         steering_path=artifact_path,
         output_dir=tmp_path,
         backend_factory=FakeBackendFactory(),
@@ -263,6 +378,48 @@ def test_generate_records_artifact_sha_in_run_manifest_before_factory_use(tmp_pa
     assert manifest["artifact_sha256"] == hashlib.sha256(artifact_path.read_bytes()).hexdigest()
     assert manifest["artifact_model"] == PRIMARY_MODEL
     assert manifest["artifact_layer"] == 25
+    assert manifest["artifact_state"] == "ready"
+
+
+def test_backend_construction_failure_leaves_retryable_same_artifact_state(tmp_path: Path) -> None:
+    from experiments.run_steering_calibration import generate_calibration, prepare_calibration
+
+    outputs = prepare_calibration(
+        sorry_records=make_sorry_records(),
+        sorry_revision="sorry-sha",
+        xstest_rows=make_xstest_rows(),
+        ta2_instructions=make_ta2_instructions(),
+        output_dir=tmp_path,
+    )
+    artifact_path = tmp_path / "vector.pt"
+    write_artifact(artifact_path)
+
+    class BackendConstructionFailure:
+        def __call__(self, **_kwargs: object) -> FakeBackend:
+            raise RuntimeError("backend construction interrupted")
+
+    with pytest.raises(RuntimeError, match="backend construction interrupted"):
+        generate_calibration(
+            private_manifest=outputs.private_manifest,
+            steering_path=artifact_path,
+            output_dir=tmp_path,
+            backend_factory=BackendConstructionFailure(),
+        )
+
+    pending = json.loads((tmp_path / "run_manifest.json").read_text(encoding="utf-8"))
+    assert pending["artifact_state"] == "pending_backend"
+    assert pending["artifact_sha256"] == hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+    assert "dtype" not in pending
+
+    generate_calibration(
+        private_manifest=outputs.private_manifest,
+        steering_path=artifact_path,
+        output_dir=tmp_path,
+        backend_factory=FakeBackendFactory(),
+    )
+    ready = json.loads((tmp_path / "run_manifest.json").read_text(encoding="utf-8"))
+    assert ready["artifact_state"] == "ready"
+    assert len(read_jsonl(tmp_path / "raw_generations.jsonl")) == 36
 
 
 def test_generate_rejects_corrupt_resume_record_before_skipping(tmp_path: Path) -> None:
@@ -276,20 +433,20 @@ def test_generate_rejects_corrupt_resume_record_before_skipping(tmp_path: Path) 
 
     with pytest.raises(ValueError, match="resume generation record"):
         generate_calibration(
-            private_manifest=make_private_manifest(), steering_path=artifact_path,
+            private_manifest=make_private_manifest(tmp_path), steering_path=artifact_path,
             output_dir=tmp_path, backend_factory=FakeBackendFactory(),
         )
 
 
-def test_private_manifest_requires_strings_and_matching_prompt_hash() -> None:
+def test_private_manifest_requires_strings_and_matching_prompt_hash(tmp_path: Path) -> None:
     from experiments.run_steering_calibration import _manifest_prompts
 
-    manifest = make_private_manifest()
+    manifest = make_private_manifest(tmp_path)
     manifest["prompts"][0]["prompt_sha256"] = "stale"
     with pytest.raises(ValueError, match="prompt_sha256"):
         _manifest_prompts(manifest)
 
-    manifest = make_private_manifest()
+    manifest = make_private_manifest(tmp_path)
     manifest["prompts"][0]["text"] = 42
     with pytest.raises(ValueError, match="non-empty string"):
         _manifest_prompts(manifest)
@@ -311,7 +468,7 @@ def test_artifact_rejection_happens_before_factory_construction(tmp_path: Path) 
     factory = FakeBackendFactory()
     with pytest.raises(ValueError, match="Llama 3.1 8B layer 25"):
         generate_calibration(
-            private_manifest=make_private_manifest(), steering_path=artifact_path,
+            private_manifest=make_private_manifest(tmp_path), steering_path=artifact_path,
             output_dir=tmp_path, backend_factory=factory,
         )
     assert factory.calls == 0
@@ -332,7 +489,7 @@ def test_incompatible_resume_artifact_sha_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="artifact_sha256"):
         generate_calibration(
-            private_manifest=make_private_manifest(), steering_path=artifact_path,
+            private_manifest=make_private_manifest(tmp_path), steering_path=artifact_path,
             output_dir=tmp_path, backend_factory=FakeBackendFactory(),
         )
 
@@ -348,8 +505,45 @@ def test_duplicate_resume_condition_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="duplicate condition"):
         generate_calibration(
-            private_manifest=make_private_manifest(), steering_path=artifact_path,
+            private_manifest=make_private_manifest(tmp_path), steering_path=artifact_path,
             output_dir=tmp_path, backend_factory=FakeBackendFactory(),
+        )
+
+
+def test_generate_quarantines_only_an_unterminated_final_jsonl_fragment(tmp_path: Path) -> None:
+    from experiments.run_steering_calibration import generate_calibration
+
+    _generate_complete_records(tmp_path)
+    records_path = tmp_path / "raw_generations.jsonl"
+    complete_bytes = records_path.read_bytes()
+    records_path.write_bytes(complete_bytes + b'{"prompt_id":"interrupted"')
+    artifact_path = tmp_path / "vector.pt"
+
+    generate_calibration(
+        private_manifest=make_private_manifest(tmp_path),
+        steering_path=artifact_path,
+        output_dir=tmp_path,
+        backend_factory=FakeBackendFactory(),
+    )
+
+    assert records_path.read_bytes() == complete_bytes
+    assert (tmp_path / "raw_generations.jsonl.unterminated-tail").read_bytes() == b'{"prompt_id":"interrupted"'
+    assert len(read_jsonl(records_path)) == 36
+
+
+def test_generate_rejects_a_malformed_completed_jsonl_record(tmp_path: Path) -> None:
+    from experiments.run_steering_calibration import generate_calibration
+
+    _generate_complete_records(tmp_path)
+    records_path = tmp_path / "raw_generations.jsonl"
+    records_path.write_bytes(records_path.read_bytes() + b'{"prompt_id":"completed-but-broken"\n')
+
+    with pytest.raises(ValueError, match="invalid JSON"):
+        generate_calibration(
+            private_manifest=make_private_manifest(tmp_path),
+            steering_path=tmp_path / "vector.pt",
+            output_dir=tmp_path,
+            backend_factory=FakeBackendFactory(),
         )
 
 
@@ -359,14 +553,18 @@ def _generate_complete_records(tmp_path: Path) -> None:
     artifact_path = tmp_path / "vector.pt"
     write_artifact(artifact_path)
     generate_calibration(
-        private_manifest=make_private_manifest(), steering_path=artifact_path,
+        private_manifest=make_private_manifest(tmp_path), steering_path=artifact_path,
         output_dir=tmp_path, backend_factory=FakeBackendFactory(),
     )
 
 
 def _write_scores(path: Path, key: dict[str, dict[str, object]], *, selected_alpha: float | None) -> None:
     with path.open("w", newline="", encoding="utf-8") as handle:
-        fields = ["response_id", "refusal_compliance", "coherence", "relevance", "repetitive", "truncated"]
+        fields = [
+            "response_id", "run_id", "blind_run_digest", "response_sha256",
+            "prompt_text", "response_text",
+            "refusal_compliance", "coherence", "relevance", "repetitive", "truncated",
+        ]
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         for response_id, condition in key.items():
@@ -376,7 +574,13 @@ def _write_scores(path: Path, key: dict[str, dict[str, object]], *, selected_alp
             if selected_alpha == alpha and prompt_id != "xstest-1":
                 refusal = 1
             writer.writerow({
-                "response_id": response_id, "refusal_compliance": refusal, "coherence": 2,
+                "response_id": response_id,
+                "run_id": condition["run_id"],
+                "blind_run_digest": condition["blind_run_digest"],
+                "response_sha256": condition["response_sha256"],
+                "prompt_text": condition["prompt_text"],
+                "response_text": condition["response_text"],
+                "refusal_compliance": refusal, "coherence": 2,
                 "relevance": 2, "repetitive": "false", "truncated": "false",
             })
 
@@ -392,6 +596,9 @@ def test_blind_hides_conditions_and_writes_separate_key(tmp_path: Path) -> None:
     assert len(rows) == len(key) == 36
     assert all("alpha" not in row and "condition" not in row for row in rows)
     assert set(row["response_id"] for row in rows) == set(key)
+    assert len({row["run_id"] for row in rows}) == 1
+    assert len({row["blind_run_digest"] for row in rows}) == 1
+    assert all(row["response_sha256"] == key[row["response_id"]]["response_sha256"] for row in rows)
 
 
 def test_summarize_requires_complete_scores_and_reports_selection(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -418,6 +625,44 @@ def test_summarize_requires_complete_scores_and_reports_selection(tmp_path: Path
         summarize_calibration_run(output_dir=tmp_path, scores_path=incomplete_path)
 
 
+def test_summarize_rejects_scores_from_stale_blinded_content(tmp_path: Path) -> None:
+    from experiments.run_steering_calibration import blind_calibration, summarize_calibration_run
+
+    _generate_complete_records(tmp_path)
+    blind_calibration(output_dir=tmp_path)
+    key = json.loads((tmp_path / "condition_key.json").read_text(encoding="utf-8"))
+    scores_path = tmp_path / "manual_scores.csv"
+    _write_scores(scores_path, key, selected_alpha=0.2)
+    rows = list(csv.DictReader(scores_path.open(encoding="utf-8")))
+    rows[0]["response_sha256"] = "0" * 64
+    with scores_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+    with pytest.raises(ValueError, match="blinded content"):
+        summarize_calibration_run(output_dir=tmp_path, scores_path=scores_path)
+
+
+def test_summarize_recomputes_score_binding_from_visible_response_text(tmp_path: Path) -> None:
+    from experiments.run_steering_calibration import blind_calibration, summarize_calibration_run
+
+    _generate_complete_records(tmp_path)
+    blind_calibration(output_dir=tmp_path)
+    key = json.loads((tmp_path / "condition_key.json").read_text(encoding="utf-8"))
+    scores_path = tmp_path / "manual_scores.csv"
+    _write_scores(scores_path, key, selected_alpha=0.2)
+    rows = list(csv.DictReader(scores_path.open(encoding="utf-8")))
+    rows[0]["response_text"] = "a different response than the scorer originally saw"
+    with scores_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+    with pytest.raises(ValueError, match="blinded content"):
+        summarize_calibration_run(output_dir=tmp_path, scores_path=scores_path)
+
+
 def test_literal_meta_mapping_refuses_nonliteral_code_and_gated_access_has_guidance(monkeypatch: pytest.MonkeyPatch) -> None:
     from experiments.run_steering_calibration import _download_sorry_records, _literal_category_mapping
 
@@ -435,6 +680,24 @@ def test_literal_meta_mapping_refuses_nonliteral_code_and_gated_access_has_guida
     monkeypatch.setitem(sys.modules, "huggingface_hub", FakeHubModule)
     with pytest.raises(RuntimeError, match="Accept the sorry-bench/sorry-bench-202503 license.*HF_TOKEN"):
         _download_sorry_records()
+
+
+def test_ta2_loader_requires_exactly_520_nonempty_instructions(tmp_path: Path) -> None:
+    from experiments.run_steering_calibration import _load_ta2_instructions
+
+    path = tmp_path / "pairs.json"
+    path.write_text(
+        json.dumps({"pairs": [{"instruction": value} for value in make_ta2_instructions(519)]}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="exactly 520 valid TA2"):
+        _load_ta2_instructions(path)
+
+    path.write_text(
+        json.dumps({"pairs": [{"instruction": value} for value in make_ta2_instructions()]}),
+        encoding="utf-8",
+    )
+    assert _load_ta2_instructions(path) == make_ta2_instructions()
 
 
 def test_sorry_download_uses_resolved_revision_for_both_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -477,7 +740,7 @@ def test_generate_requires_complete_matching_public_manifest(tmp_path: Path) -> 
 
     outputs = prepare_calibration(
         sorry_records=make_sorry_records(), sorry_revision="sorry-sha", xstest_rows=make_xstest_rows(),
-        ta2_instructions=[], output_dir=tmp_path,
+        ta2_instructions=make_ta2_instructions(), output_dir=tmp_path,
     )
     public = json.loads((tmp_path / "run_manifest.json").read_text(encoding="utf-8"))
     del public["prompts"]
@@ -496,7 +759,7 @@ def test_generate_rejects_public_private_revision_mismatch(tmp_path: Path) -> No
 
     outputs = prepare_calibration(
         sorry_records=make_sorry_records(), sorry_revision="sorry-sha", xstest_rows=make_xstest_rows(),
-        ta2_instructions=[], output_dir=tmp_path,
+        ta2_instructions=make_ta2_instructions(), output_dir=tmp_path,
     )
     public = json.loads((tmp_path / "run_manifest.json").read_text(encoding="utf-8"))
     public["sorry_revision"] = "different-sha"
@@ -510,12 +773,34 @@ def test_generate_rejects_public_private_revision_mismatch(tmp_path: Path) -> No
         )
 
 
+def test_generate_rejects_a_different_current_repository_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import experiments.run_steering_calibration as runner
+
+    outputs = runner.prepare_calibration(
+        sorry_records=make_sorry_records(), sorry_revision="sorry-sha", xstest_rows=make_xstest_rows(),
+        ta2_instructions=make_ta2_instructions(), output_dir=tmp_path,
+    )
+    artifact_path = tmp_path / "vector.pt"
+    write_artifact(artifact_path)
+    monkeypatch.setattr(runner, "_repository_commit", lambda: "f" * 40)
+
+    with pytest.raises(ValueError, match="current repository commit"):
+        runner.generate_calibration(
+            private_manifest=outputs.private_manifest,
+            steering_path=artifact_path,
+            output_dir=tmp_path,
+            backend_factory=FakeBackendFactory(),
+        )
+
+
 def test_generate_rejects_mismatched_public_generation_parameters(tmp_path: Path) -> None:
     from experiments.run_steering_calibration import generate_calibration, prepare_calibration
 
     outputs = prepare_calibration(
         sorry_records=make_sorry_records(), sorry_revision="sorry-sha", xstest_rows=make_xstest_rows(),
-        ta2_instructions=[], output_dir=tmp_path,
+        ta2_instructions=make_ta2_instructions(), output_dir=tmp_path,
     )
     public = json.loads((tmp_path / "run_manifest.json").read_text(encoding="utf-8"))
     public["generation_parameters"]["top_p"] = 0.9
@@ -555,7 +840,7 @@ def test_generate_rejects_invalid_resume_provenance(
     records_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
     with pytest.raises(ValueError, match=match):
         generate_calibration(
-            private_manifest=make_private_manifest(), steering_path=artifact_path,
+            private_manifest=make_private_manifest(tmp_path), steering_path=artifact_path,
             output_dir=tmp_path, backend_factory=FakeBackendFactory(),
         )
 
@@ -577,6 +862,6 @@ def test_generate_raises_when_final_jsonl_is_incomplete(tmp_path: Path, monkeypa
     monkeypatch.setattr(runner, "_append_jsonl", drop_one)
     with pytest.raises(ValueError, match="complete 36-record"):
         runner.generate_calibration(
-            private_manifest=make_private_manifest(), steering_path=artifact_path,
+            private_manifest=make_private_manifest(tmp_path), steering_path=artifact_path,
             output_dir=tmp_path, backend_factory=FakeBackendFactory(),
         )

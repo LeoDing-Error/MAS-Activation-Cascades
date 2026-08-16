@@ -149,7 +149,23 @@ Security note:
 
 - loading steering artifacts now uses a restricted `torch.load(..., weights_only=True)` path when supported
 
-### 7. Start the clean-agent model server
+### 7. Calibrate, then complete held-out confirmation
+
+Before any Phase 1 command, run
+[`notebooks/colab_steering_calibration.ipynb`](notebooks/colab_steering_calibration.ipynb).
+Accept the gated
+[`sorry-bench/sorry-bench-202503`](https://huggingface.co/datasets/sorry-bench/sorry-bench-202503)
+license first. Preparation requires exactly 520 valid TA2 construction
+instructions and records only their count and SHA-256 digest.
+
+The 36-response pilot is a manipulation check. Even when it selects a candidate
+alpha, every Phase 1 entry surface remains blocked. Run a separate held-out
+confirmation before proceeding. Its JSON must use kind
+`phase1_held_out_confirmation`, set `held_out_confirmation_passed` to true, and
+bind the calibration run digest, held-out run digest, exact artifact SHA-256,
+and selected alpha. Do not derive this record from the pilot summary alone.
+
+### 8. Start the clean-agent model server
 
 Command:
 
@@ -176,7 +192,10 @@ GPU note:
 - `Meta-Llama-3.1-8B-Instruct` plus a second local steered copy is realistically an A100-class workflow
 - on a T4, use the fallback model and treat multi-agent runs as smoke tests
 
-### 8. Run experiments
+### 9. Run experiments
+
+Every command below requires `<held-out-confirmation.json>`. The runner validates
+that record before creating output directories or loading a model.
 
 Single-agent validation:
 
@@ -185,25 +204,35 @@ conda run -n cascade python experiments/run_phase1.py \
   --experiment 1.1 \
   --model meta-llama/Meta-Llama-3.1-8B-Instruct \
   --steering-vector steering_vectors/harmfulness_llama3_8b.pt \
+  --held-out-confirmation <held-out-confirmation.json> \
   --n-tasks 10
 ```
 
 Two-agent chain:
 
 ```bash
-./scripts/run_phase1_local.sh 1.2 steering_vectors/harmfulness_llama3_8b.pt
+./scripts/run_phase1_local.sh \
+  --steering-strength <held-out-confirmed-alpha> \
+  --held-out-confirmation <held-out-confirmation.json> \
+  1.2 steering_vectors/harmfulness_llama3_8b.pt
 ```
 
 Three-agent chain:
 
 ```bash
-./scripts/run_phase1_local.sh 1.3 steering_vectors/harmfulness_llama3_8b.pt
+./scripts/run_phase1_local.sh \
+  --steering-strength <held-out-confirmed-alpha> \
+  --held-out-confirmation <held-out-confirmation.json> \
+  1.3 steering_vectors/harmfulness_llama3_8b.pt
 ```
 
 Star topology:
 
 ```bash
-./scripts/run_phase1_local.sh 1.4 steering_vectors/harmfulness_llama3_8b.pt
+./scripts/run_phase1_local.sh \
+  --steering-strength <held-out-confirmed-alpha> \
+  --held-out-confirmation <held-out-confirmation.json> \
+  1.4 steering_vectors/harmfulness_llama3_8b.pt
 ```
 
 Star-topology execution note:
@@ -214,10 +243,12 @@ Star-topology execution note:
 
 Important guard:
 
+- every Phase 1 experiment requires `--held-out-confirmation`; pilot output alone is rejected
+- the confirmation binds the exact artifact SHA-256, and experiments `1.2` to `1.4` must use its selected alpha
 - `experiments/run_phase1.py` requires `--clean-api-base` for experiments `1.2` to `1.4` unless `--allow-local-clean-models` is passed explicitly
 - this guard prevents accidental multi-copy local model loading
 
-### 9. Review outputs
+### 10. Review outputs
 
 Results are written under `results/exp1_1`, `results/exp1_2`, `results/exp1_3`, and `results/exp1_4`.
 

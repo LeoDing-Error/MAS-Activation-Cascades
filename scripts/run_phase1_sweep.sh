@@ -7,7 +7,7 @@ ENV_NAME="$DEFAULT_ENV_NAME"
 
 usage() {
   cat <<EOF
-Usage: $0 [--env-name NAME] --experiments 1.2,1.3 --steering-vector path [additional args...]
+Usage: $0 [--env-name NAME] --experiments 1.2,1.3 --steering-vector PATH --steering-strengths ALPHA --held-out-confirmation PATH [additional args...]
 EOF
 }
 

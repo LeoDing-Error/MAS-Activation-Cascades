@@ -7,6 +7,25 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 
+_FAKE_MODULE_NAMES = (
+    "camel",
+    "camel.agents",
+    "camel.messages.base",
+    "camel.responses",
+    "camel.societies.workforce",
+    "camel.societies.workforce.events",
+    "camel.societies.workforce.workforce_callback",
+    "camel.tasks.task",
+    "src.backends.camel_integration",
+    "src.topologies.runner",
+    "torch",
+)
+_MISSING_MODULE = object()
+_PREVIOUS_MODULES = {
+    name: sys.modules.get(name, _MISSING_MODULE) for name in _FAKE_MODULE_NAMES
+}
+
+
 class _EventBase:
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
@@ -100,6 +119,12 @@ fake_torch.Tensor = object
 sys.modules["torch"] = fake_torch
 
 from src.topologies.runner import AgentNode, CascadeTopologyRunner
+
+for _module_name, _previous_module in _PREVIOUS_MODULES.items():
+    if _previous_module is _MISSING_MODULE:
+        sys.modules.pop(_module_name, None)
+    else:
+        sys.modules[_module_name] = _previous_module
 
 
 class FakeAgent:
