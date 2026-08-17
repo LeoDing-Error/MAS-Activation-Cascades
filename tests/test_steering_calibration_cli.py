@@ -833,11 +833,11 @@ def _current_sorry_meta_source(
 ) -> str:
     values = (
         category_descriptions if category_descriptions is not None
-        else [f"Full category {index}" for index in range(1, 46)],
+        else [f"Full category {index}" for index in range(1, 45)],
         category_descriptions_short if category_descriptions_short is not None
-        else [f"Short category {index}" for index in range(1, 46)],
+        else [f"Short category {index}" for index in range(1, 45)],
         category_descriptions_shortest if category_descriptions_shortest is not None
-        else [f"Brief category {index}" for index in range(1, 46)],
+        else [f"Brief category {index}" for index in range(1, 45)],
     )
     return "\n".join(
         f"{name} = {value!r}"
@@ -876,7 +876,7 @@ def test_sorry_download_maps_current_literal_list_metadata_categories(
     question_path = tmp_path / "question.jsonl"
     question_path.write_text("\n".join(
         json.dumps({"question_id": index, "category": str(index), "turns": [f"prompt {index}"]})
-        for index in range(1, 46)
+        for index in range(1, 45)
     ), encoding="utf-8")
     meta_path = tmp_path / "meta_info.py"
     meta_path.write_text(_current_sorry_meta_source(), encoding="utf-8")
@@ -885,29 +885,44 @@ def test_sorry_download_maps_current_literal_list_metadata_categories(
 
     assert revision == "resolved-sha"
     assert [(record["category"], record["high_level_domain"]) for record in records] == [
-        *((str(index), "hate_speech_generation") for index in range(1, 7)),
-        *((str(index), "assistance_with_crimes_or_torts") for index in range(7, 26)),
-        *((str(index), "potentially_inappropriate_topics") for index in range(26, 41)),
-        *((str(index), "potentially_unqualified_advice") for index in range(41, 46)),
+        *((str(index), "hate_speech_generation") for index in range(1, 6)),
+        *((str(index), "assistance_with_crimes_or_torts") for index in range(6, 25)),
+        *((str(index), "potentially_inappropriate_topics") for index in range(25, 40)),
+        *((str(index), "potentially_unqualified_advice") for index in range(40, 45)),
     ]
 
 
 def test_literal_meta_mapping_rejects_malformed_authoritative_category_list() -> None:
     from experiments.run_steering_calibration import _literal_category_mapping
 
-    malformed = "category_descriptions = " + repr([f"Category {index}" for index in range(1, 45)])
+    malformed = _current_sorry_meta_source(
+        category_descriptions=[f"Category {index}" for index in range(1, 44)],
+    )
     with pytest.raises(ValueError, match="category_descriptions"):
         _literal_category_mapping(malformed)
+
+
+def test_literal_meta_mapping_rejects_45_entry_authoritative_category_lists() -> None:
+    from experiments.run_steering_calibration import _literal_category_mapping
+
+    source = _current_sorry_meta_source(
+        category_descriptions=[f"Full category {index}" for index in range(1, 46)],
+        category_descriptions_short=[f"Short category {index}" for index in range(1, 46)],
+        category_descriptions_shortest=[f"Brief category {index}" for index in range(1, 46)],
+    )
+
+    with pytest.raises(ValueError, match="exactly 44 nonempty strings"):
+        _literal_category_mapping(source)
 
 
 @pytest.mark.parametrize("source", [
     _current_sorry_meta_source() + "\n" + _legacy_sorry_meta_source(),
     "\n".join(_current_sorry_meta_source().splitlines()[:-1]),
-    _current_sorry_meta_source(category_descriptions_short=[f"Short {index}" for index in range(1, 45)]),
+    _current_sorry_meta_source(category_descriptions_short=[f"Short {index}" for index in range(1, 44)]),
     "\n".join((
-        "category_descriptions = alias = " + repr([f"Full category {index}" for index in range(1, 46)]),
-        "category_descriptions_short = " + repr([f"Short category {index}" for index in range(1, 46)]),
-        "category_descriptions_shortest = " + repr([f"Brief category {index}" for index in range(1, 46)]),
+        "category_descriptions = alias = " + repr([f"Full category {index}" for index in range(1, 45)]),
+        "category_descriptions_short = " + repr([f"Short category {index}" for index in range(1, 45)]),
+        "category_descriptions_shortest = " + repr([f"Brief category {index}" for index in range(1, 45)]),
     )),
     _current_sorry_meta_source().replace(
         "category_descriptions_short = ", "category_descriptions_short = build_categories() # ", 1,
@@ -975,7 +990,7 @@ def test_literal_meta_mapping_rejects_match_mapping_rest_authority_rebinding() -
         _literal_category_mapping(_current_sorry_meta_source() + "\nmatch {}:\n    case {**category_descriptions}:\n        pass")
 
 
-@pytest.mark.parametrize("raw_category", [True, 1.0, "01", "0", 46])
+@pytest.mark.parametrize("raw_category", [True, 1.0, "01", "0", 45])
 def test_sorry_download_rejects_noncanonical_current_schema_categories(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raw_category: object,
 ) -> None:

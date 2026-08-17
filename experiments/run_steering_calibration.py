@@ -868,17 +868,17 @@ def _literal_category_mapping_with_schema(source: str) -> tuple[dict[str, str], 
                 ) from None
             if (
                 not isinstance(descriptions, list)
-                or len(descriptions) != 45
+                or len(descriptions) != 44
                 or any(not isinstance(description, str) or not description.strip() for description in descriptions)
             ):
                 raise ValueError(
-                    "Current SORRY-Bench category_descriptions lists must contain exactly 45 nonempty strings"
+                    "Current SORRY-Bench category_descriptions lists must contain exactly 44 nonempty strings"
                 )
         return {
-            **{str(category): SORRY_DOMAINS[0] for category in range(1, 7)},
-            **{str(category): SORRY_DOMAINS[1] for category in range(7, 26)},
-            **{str(category): SORRY_DOMAINS[2] for category in range(26, 41)},
-            **{str(category): SORRY_DOMAINS[3] for category in range(41, 46)},
+            **{str(category): SORRY_DOMAINS[0] for category in range(1, 6)},
+            **{str(category): SORRY_DOMAINS[1] for category in range(6, 25)},
+            **{str(category): SORRY_DOMAINS[2] for category in range(25, 40)},
+            **{str(category): SORRY_DOMAINS[3] for category in range(40, 45)},
         }, True
 
     if not has_legacy_schema:
@@ -950,9 +950,9 @@ def _canonical_current_sorry_category(raw_category: object) -> str:
     elif isinstance(raw_category, str) and raw_category.isascii() and raw_category.isdecimal():
         category = int(raw_category)
     else:
-        raise ValueError("Expected a canonical SORRY-Bench category in 1..45")
-    if not 1 <= category <= 45 or (isinstance(raw_category, str) and raw_category != str(category)):
-        raise ValueError("Expected a canonical SORRY-Bench category in 1..45")
+        raise ValueError("Expected a canonical SORRY-Bench category in 1..44")
+    if not 1 <= category <= 44 or (isinstance(raw_category, str) and raw_category != str(category)):
+        raise ValueError("Expected a canonical SORRY-Bench category in 1..44")
     return str(category)
 
 
